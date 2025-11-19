@@ -1,0 +1,18 @@
+# virtual environment directories
+venv
+
+# environment variable files
+.env
+
+# .vscode settings
+.vscode/
+
+# Python cache files
+__pycache__/
+
+# Script Temp files
+/backend/scripts
+
+# Raw data files
+/data
+
