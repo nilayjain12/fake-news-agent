@@ -1,13 +1,11 @@
-"""Wraps the built-in Google Search tool from ADK into an AgentTool."""
+# backend/tools/google_search_tool.py
+"""Google Search tool wrapper for ADK."""
 from google.adk.tools import google_search, AgentTool
 from google.adk.agents import LlmAgent
 from config import ADK_MODEL_NAME, get_logger
 
 logger = get_logger(__name__)
 
-logger.debug("Creating google_search_agent_tool wrapper")
-
-# Create an agent that uses Google Search
 _google_search_agent = LlmAgent(
     name="google_search_agent",
     model=ADK_MODEL_NAME,
@@ -20,6 +18,4 @@ _google_search_agent = LlmAgent(
     tools=[google_search]
 )
 
-# Wrap the agent as a tool so it can be used by other agents
-# This is necessary because you can't pass an LlmAgent directly as a tool
 google_search_agent_tool = AgentTool(agent=_google_search_agent)
