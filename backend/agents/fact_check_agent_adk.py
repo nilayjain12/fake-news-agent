@@ -5,6 +5,8 @@ from agents.ingestion_agent import IngestionAgent
 from tools.faiss_tool import faiss_search_tool
 from tools.google_search_tool import google_search_agent_tool
 from config import ADK_MODEL_NAME, get_logger
+from memory.manager import MemoryManager
+import time
 
 logger = get_logger(__name__)
 
@@ -17,6 +19,7 @@ class FactCheckSequentialAgent(SequentialAgent):
         logger.warning("🚀 Initializing Fact-Check Agent")
         
         object.__setattr__(self, "ingest_agent", IngestionAgent())
+        object.__setattr__(self, "memory_manager", MemoryManager())
         
         claim_extractor = LlmAgent(
             name="claim_extractor",
@@ -84,3 +87,23 @@ Format as a readable report, not JSON.""",
             return article_text
         else:
             return input_text
+        
+    
+    def check_cache(self, claim: str) -> dict:
+        """Check if we've already verified this claim."""
+        memory = object.__getattribute__(self, "memory_manager")
+        cached = memory.get_cached_verdict(claim)
+        if cached:
+            return {
+                "from_cache": True,
+                "verdict": cached["verdict"],
+                "confidence": cached["confidence"],
+                "evidence_count": cached["evidence_count"]
+            }
+        return {"from_cache": False}
+    
+    def cache_result(self, claim: str, verdict: str, confidence: float, 
+                     evidence_count: int, session_id: str):
+        """Cache the verification result."""
+        memory = object.__getattribute__(self, "memory_manager")
+        memory.cache_verdict(claim, verdict, confidence, evidence_count, session_id)
