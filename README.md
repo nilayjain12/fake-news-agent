@@ -18,14 +18,7 @@
 - [Key Features](#-key-features)
 - [Technology Stack](#-technology-stack)
 - [Installation & Setup](#-installation--setup)
-- [Usage](#-usage)
-- [Agent Pipeline Details](#-agent-pipeline-details)
-- [Memory System](#-memory-system)
-- [Performance Optimizations](#-performance-optimizations)
-- [Project Journey](#-project-journey)
 - [Future Enhancements](#-future-enhancements)
-- [Contributing](#-contributing)
-- [License](#-license)
 
 ---
 
@@ -67,7 +60,7 @@ Misinformation and fake news have become critical threats to informed decision-m
 
 ## 🏗️ Architecture
 
-![alt text](../docs/architecture_diagram.PNG)
+![alt text](architecture-diagram.png)
 
 ---
 
@@ -110,7 +103,7 @@ Built on Google's Agent Development Kit (ADK), the system coordinates 5 speciali
 | **Web Search** | Google Search (via Gemini) | Real-time information retrieval |
 | **Memory Store** | SQLite (WAL mode) | Session & verdict persistence |
 | **Web Scraping** | BeautifulSoup4 | URL content extraction |
-| **UI Framework** | Streamlit | Interactive web interface |
+| **UI Framework** | Gradio | Interactive web interface |
 | **Deployment** | Hugging Face Spaces | Free cloud hosting |
 
 ---
@@ -153,19 +146,19 @@ data/embeddings/
 python backend/main.py
 ```
 
-**Streamlit UI:**
+**Gradio UI:**
 ```bash
-streamlit run app.py
+gradio run_ui.py
 ```
 
 ---
 
-### Web Interface (Streamlit)
+### Web Interface (Gradio)
 
-1. Paste a news article URL or raw text
-2. Click "Verify News" button
-3. View real-time analysis with verdict, confidence, and detailed report
-4. Explore cached claims and session history
+1. Paste a news article URL or raw text.
+2. Click "Verify" button.
+3. View real-time analysis with verdict, confidence, and detailed report.
+4. Explore cached claims and session history.
 
 ---
 
