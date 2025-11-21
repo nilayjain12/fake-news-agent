@@ -16,3 +16,15 @@ __pycache__/
 # Raw data files
 /data
 
+# Gradio virtual environment
+/gradio-env
+
+# Project description
+backend/PROJECT_DESCRIPTION.md
+
+# Streamlit files
+/.streamlit/
+
+/docs
+
+ui/README.md
