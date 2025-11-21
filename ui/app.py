@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 import difflib
+import random
 
 # Add backend to path
 backend_path = Path(__file__).parent.parent / "backend"
@@ -379,7 +380,14 @@ def create_interface():
                 
                 # Load example
                 def load_example():
-                    example = "Scientists have discovered that drinking 8 glasses of water daily is essential for optimal health and prevents all diseases."
+                    example = random.choice([
+                        "The Earth revolves around the Sun once every 365 days.",
+                        "Honey never spoils and can remain edible for thousands of years.",
+                        "Scientists have discovered a vaccine that permanently eliminates the common cold.",
+                        "Drinking eight glasses of water per day prevents all diseases.",
+                        "Lightning can strike the same place more than once.",
+                        "Humans can survive for weeks without sleep with no negative health effects."
+                    ])
                     return example
                 
                 example_btn.click(
