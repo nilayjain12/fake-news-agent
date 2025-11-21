@@ -14,9 +14,9 @@
 
 - [Problem Statement](#-problem-statement)
 - [Solution Overview](#-solution-overview)
-- [Architecture](#-architecture)
+- [Architecture](#️-architecture)
 - [Key Features](#-key-features)
-- [Technology Stack](#-technology-stack)
+- [Technology Stack](#️-technology-stack)
 - [Installation & Setup](#-installation--setup)
 - [Future Enhancements](#-future-enhancements)
 
