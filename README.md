@@ -4,7 +4,6 @@
 
 [![Built with Google ADK](https://img.shields.io/badge/Built%20with-Google%20ADK-4285F4?style=flat&logo=google)](https://github.com/google/adk)
 [![Powered by Gemini](https://img.shields.io/badge/Powered%20by-Gemini%202.5-34A853?style=flat)](https://ai.google.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Live Demo:** [Try it on Hugging Face Spaces](https://huggingface.co/spaces/nilayj1296/fake-news-agent)
 
