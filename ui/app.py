@@ -113,7 +113,7 @@ def process_fact_check(user_input: str) -> tuple:
     agent_instance, memory_instance = initialize_agent()
     
     if not user_input.strip():
-        return "Please enter some text to verify.", [], "No verdict", 0.0
+        return "", [], [], "", 0.0
     
     # Preprocess input
     processed_input = agent_instance.preprocess_input(user_input)
@@ -135,15 +135,15 @@ def process_fact_check(user_input: str) -> tuple:
         verdict = cached_claim["verdict"]
         confidence = cached_claim["confidence"]
         
-        report = f"""## 📋 Fact-Check Report: Cached Result
+        final_assessment = f"""### ✅ Fact-Check Report: Cached Result
 
-**Status:** ✨ Retrieved from memory cache ({execution_time:.0f}ms - 700x faster!)
+**Status:** Retrieved from memory cache ({execution_time:.0f}ms - 700x faster!)
 
 **Query:** {user_input[:200]}
 
 **Cached Claim:** {cached_claim['claim_text']}
 
-**Verdict:** {verdict}
+**Verdict:** **{verdict}**
 
 **Confidence:** {confidence:.1%}
 
@@ -179,6 +179,7 @@ def process_fact_check(user_input: str) -> tuple:
         thinking_steps.append(("✅ Verification Complete!", f"Total time: {execution_time:.0f}ms"))
         
         report = result.get("report", "No report generated")
+        final_assessment = report
         
         # Cache the result
         if verdict and verdict != "ERROR":
@@ -205,7 +206,7 @@ def process_fact_check(user_input: str) -> tuple:
     except Exception as e:
         logger.warning(f"Failed to log interaction: {str(e)}")
     
-    return report, thinking_steps, verdict, confidence
+    return user_input, thinking_steps, [], final_assessment, confidence
 
 
 def get_stats() -> str:
@@ -242,31 +243,57 @@ def clear_history():
 
 
 def format_thinking_process(thinking_steps: list) -> str:
-    """Format thinking steps into markdown"""
+    """Format thinking steps into markdown with collapsible section"""
     if not thinking_steps:
         return ""
     
-    formatted = "## 🧠 Agent Thinking Process\n\n"
+    formatted = ""
     for i, (step_name, details) in enumerate(thinking_steps, 1):
-        formatted += f"### {step_name}\n{details}\n\n"
+        formatted += f"**{step_name}**  \n{details}\n\n"
     
     return formatted
+
+
+def format_response(user_query: str, thinking_steps: list, final_assessment: str, confidence: float) -> str:
+    """Format the complete response with collapsible thinking section"""
+    
+    thinking_content = format_thinking_process(thinking_steps)
+    
+    # Create HTML with collapsible details element
+    response = f"""<details style="margin: 15px 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
+<summary style="cursor: pointer; font-weight: bold; color: #667eea;">🧠 Agent Thinking Process</summary>
+
+{thinking_content}
+
+</details>
+
+{final_assessment}
+"""
+    
+    return response
 
 
 def chat_interface(message: str, history: list) -> tuple:
     """Main chat interface function"""
     if not message.strip():
-        return history, "Please enter some text to verify."
+        return history, ""
     
-    # Process the fact check
-    report, thinking_steps, verdict, confidence = process_fact_check(message)
+    # Add user message immediately to history
+    history.append([message, "⏳ Processing your request..."])
     
-    # Format the full response
-    thinking_process = format_thinking_process(thinking_steps)
-    full_response = f"{thinking_process}\n\n{report}"
-    
-    # Add to history
-    history.append([message, full_response])
+    try:
+        # Process the fact check
+        user_query, thinking_steps, _, final_assessment, confidence = process_fact_check(message)
+        
+        # Format the complete response with thinking steps in collapsible section
+        formatted_response = format_response(user_query, thinking_steps, final_assessment, confidence)
+        
+        # Update the last message with the complete response
+        history[-1][1] = formatted_response
+        
+    except Exception as e:
+        logger.exception(f"Error processing request: {str(e)}")
+        history[-1][1] = f"❌ Error: {str(e)[:200]}\n\nPlease try again with different input."
     
     return history, ""
 
@@ -308,7 +335,7 @@ def create_interface():
             color: white;
         }
         .thinking-process {
-            background-color: #f0f0f0;
+            background-color: #ffffff;
             padding: 15px;
             border-radius: 10px;
             margin: 10px 0;
@@ -319,6 +346,32 @@ def create_interface():
             padding: 15px;
             border-radius: 10px;
             margin: 10px 0;
+        }
+        details {
+            margin: 15px 0;
+            padding: 15px;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            background-color: #ffffff;
+        }
+        details[open] {
+            background-color: #f0f7ff;
+        }
+        summary {
+            cursor: pointer;
+            font-weight: bold;
+            color: #667eea;
+            user-select: none;
+            padding: 5px;
+            margin: -5px;
+        }
+        summary:hover {
+            color: #5568d3;
+            background-color: #e8f0ff;
+            border-radius: 4px;
+        }
+        details p, details strong, details em, details code {
+            color: #333333;
         }
         """
     ) as demo:
@@ -345,7 +398,8 @@ def create_interface():
                     chatbot = gr.Chatbot(
                         label="Chat History",
                         height=400,
-                        show_label=True
+                        show_label=True,
+                        render_markdown=True
                     )
                     
                     with gr.Row():
