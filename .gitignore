@@ -14,7 +14,7 @@ __pycache__/
 /backend/scripts
 
 # Raw data files
-/data
+/data/
 
 # Gradio virtual environment
 /gradio-env
@@ -77,10 +77,6 @@ gradio-env/
 
 # ==================== LARGE DATA FILES ====================
 # FAISS embeddings are too large for git
-data/embeddings/
-data/embeddings/**/*
-faiss_index/
-*.faiss
 *.pkl
 
 # ==================== DATABASE ====================
