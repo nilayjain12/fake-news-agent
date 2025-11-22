@@ -28,3 +28,130 @@ backend/PROJECT_DESCRIPTION.md
 /docs
 
 ui/README.md
+
+# .gitignore for Fake News Detection Agent
+
+# ==================== SECURITY ====================
+# NEVER commit API keys!
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets.json
+
+# ==================== PYTHON ====================
+# Python compiled files
+*.py[cod]
+__pycache__/
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==================== VIRTUAL ENVIRONMENTS ====================
+# Python virtual environments
+venv/
+ENV/
+env/
+.venv
+gradio-env/
+.virtualenv
+.env_backup
+
+# ==================== LARGE DATA FILES ====================
+# FAISS embeddings are too large for git
+data/embeddings/
+data/embeddings/**/*
+faiss_index/
+*.faiss
+*.pkl
+
+# ==================== DATABASE ====================
+# SQLite database files
+data/memory.db
+data/*.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ==================== IDE ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# ==================== TESTING ====================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+pytest.ini
+.hypothesis/
+
+# ==================== GRADIO ====================
+gradio_cached_examples/
+gradio_running_from/
+.gradio/
+
+# ==================== LOGS ====================
+*.log
+logs/
+*.log.*
+
+# ==================== NODE (if any) ====================
+node_modules/
+npm-debug.log
+package-lock.json
+
+# ==================== JUPYTER ====================
+.ipynb_checkpoints
+*.ipynb
+
+# ==================== MISC ====================
+.cache/
+.tmp/
+temp/
+tmp/
+*.temp
+*.bak
+*.backup
+.DS_Store
+Thumbs.db
+
+# ==================== SPECIFIC TO PROJECT ====================
+# Local test files
+test_results/
+debug/
+*.tmp
+
+# Downloaded models (if stored locally)
+models/
+checkpoints/
+
+# Session files
+session_*.txt
