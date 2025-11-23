@@ -6,6 +6,7 @@
 [![Powered by Gemini](https://img.shields.io/badge/Powered%20by-Gemini%202.5-34A853?style=flat)](https://ai.google.dev/)
 
 **Live Demo:** [Try it on Hugging Face Spaces](https://huggingface.co/spaces/nilayj1296/fake-news-agent)
+**YouTube Video Demo:** [Watch Demo Video Here](https://youtu.be/veIUbuGWeCQ)
 
 ---
 
