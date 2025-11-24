@@ -5,7 +5,7 @@
 [![Built with Google ADK](https://img.shields.io/badge/Built%20with-Google%20ADK-4285F4?style=flat&logo=google)](https://github.com/google/adk)
 [![Powered by Gemini](https://img.shields.io/badge/Powered%20by-Gemini%202.5-34A853?style=flat)](https://ai.google.dev/)
 
-**Live Demo:** [Try it on Hugging Face Spaces](https://huggingface.co/spaces/nilayj1296/fake-news-agent)
+**Live Demo:** [Try it on Hugging Face Spaces](https://huggingface.co/spaces/nilayj1296/fake-news-agents)
 **YouTube Video Demo:** [Watch Demo Video Here](https://youtu.be/veIUbuGWeCQ)
 
 ---
@@ -36,6 +36,7 @@ Misinformation and fake news have become critical threats to informed decision-m
 3. **Complexity:** Claims often require cross-referencing multiple sources
 4. **Context:** Understanding nuanced claims requires domain knowledge
 5. **Trust:** Users need transparent, evidence-based verdicts
+6. **Visual Misinformation:** Screenshots, memes, and infographics spread false claims without easy fact-checking
 
 ---
 
@@ -55,6 +56,7 @@ Misinformation and fake news have become critical threats to informed decision-m
 - 💾 **Memory-Enabled** - Learns from previous verifications to improve speed
 - 🔄 **Scalable** - Batch processing and parallel retrieval handle high volumes
 - 🌐 **Real-Time** - Combines static knowledge base with live web search
+- 📸 **Visual Intelligence** - Extracts text from images for verification
 
 ---
 
@@ -72,6 +74,7 @@ Built on Google's Agent Development Kit (ADK), the system coordinates 5 speciali
 - **ClaimExtractionAgent**: Heuristic-based claim identification
 - **VerificationAgent**: Parallel evidence retrieval + batch evaluation
 - **AggregatorAgent**: Weighted verdict generation
+- **ImageProcessingAgent:** OCR and visual claim extraction
 - **FactCheckSequentialAgent**: Pipeline orchestrator
 
 ### 2. **Dual-Source Verification**
@@ -83,8 +86,14 @@ Built on Google's Agent Development Kit (ADK), the system coordinates 5 speciali
 - **Claim Caching**: Stores verified claims with verdicts, and timestamps
 - **Session Management**: Tracks user interactions across sessions
 
+### 4. **Image Intelligence**
 
-### 4. **Comprehensive Reporting**
+- **Vision API Integration:** Gemini 2.5 Vision for text extraction from images
+- **Multi-Language Support:** Extracts text in multiple languages
+- **Smart Claim Identification:** Automatically identifies verifiable claims from extracted text
+- **Unified Pipeline:** Image claims go through same verification as text claims
+
+### 5. **Comprehensive Reporting**
 - Structured fact-check reports with claim-level analysis
 - Evidence source attribution (FAISS vs Web)
 - Confidence scores and verdict distribution
@@ -98,6 +107,7 @@ Built on Google's Agent Development Kit (ADK), the system coordinates 5 speciali
 |-----------|-----------|---------|
 | **Agent Framework** | Google ADK | Multi-agent orchestration |
 | **LLM** | Gemini 2.5 Flash | Evidence evaluation & generation |
+| **Vision Model** | Gemini 2.5 Vision | Image OCR and text extraction |
 | **Vector Database** | FAISS | Semantic search over knowledge base |
 | **Embeddings** | HuggingFace (multilingual-e5-small) | Text vectorization |
 | **Web Search** | Google Search (via Gemini) | Real-time information retrieval |
@@ -164,7 +174,7 @@ gradio run_ui.py
 
 ## 🚀 Future Enhancements
 
-- [ ] **Multi-Language Support**: Expand to non-English articles
+- [ ] **Multi-Language Support**: Expand to non-English text articles
 - [ ] **Real-Time Monitoring**: Track trending fake news topics
 - [ ] **User Feedback Loop**: Allow users to flag incorrect verdicts
 - [ ] **Advanced Embeddings**: Switch to domain-specific models (e.g., fact-checking BERT)
