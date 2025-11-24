@@ -10,14 +10,31 @@ from pathlib import Path
 from datetime import datetime
 import difflib
 import random
+import os
 
-# Add backend to path
-backend_path = Path(__file__).parent.parent / "backend"
-sys.path.insert(0, str(backend_path))
+# ==========================================
+# FIX: Set up proper Python path
+# ==========================================
+# Get the absolute path to the backend directory
+BACKEND_PATH = Path(__file__).parent.parent / "backend"
+sys.path.insert(0, str(BACKEND_PATH))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agents.fact_check_agent_adk import FactCheckSequentialAgent
-from memory.manager import MemoryManager
-from config import get_logger
+# Set working directory to backend for relative imports
+os.chdir(str(BACKEND_PATH))
+
+# Now import backend modules
+try:
+    from agents.fact_check_agent_adk import FactCheckSequentialAgent
+    from agents.image_processing_agent import ImageProcessingAgent
+    from memory.manager import MemoryManager
+    from config import get_logger
+    print("✅ All imports successful!")
+except ImportError as e:
+    print(f"❌ Import Error: {e}")
+    print(f"Backend path: {BACKEND_PATH}")
+    print(f"Backend path exists: {BACKEND_PATH.exists()}")
+    sys.exit(1)
 
 logger = get_logger(__name__)
 
@@ -28,16 +45,19 @@ messages_history = []
 session_id = None
 
 
-
 def initialize_agent():
     """Initialize agent and memory manager"""
     global agent, memory, session_id
     if agent is None:
-        agent = FactCheckSequentialAgent()
-        memory = MemoryManager()
-        session_id = f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        memory.create_session(session_id, user_id="web-user")
-        logger.info(f"Agent initialized with session: {session_id}")
+        try:
+            agent = FactCheckSequentialAgent()
+            memory = MemoryManager()
+            session_id = f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            memory.create_session(session_id, user_id="web-user")
+            logger.warning(f"Agent initialized with session: {session_id}")
+        except Exception as e:
+            logger.warning(f"Error initializing agent: {str(e)}")
+            raise
     return agent, memory
 
 
@@ -209,11 +229,47 @@ def process_fact_check(user_input: str) -> tuple:
     return user_input, thinking_steps, [], final_assessment, confidence
 
 
-def get_stats() -> str:
-    """Get system statistics"""
-    _, memory_instance = initialize_agent()
+def process_image_verification(image_path):
+    """Process image-based verification."""
+    if image_path is None:
+        return "Please upload an image first."
     
     try:
+        agent_instance, memory_instance = initialize_agent()
+        
+        logger.warning(f"🖼️  Processing image: {image_path}")
+        
+        # Run image pipeline
+        result = agent_instance.run_fact_check_pipeline_with_image(image_path)
+        
+        report = result.get("report", "No report")
+        verdict = result.get("verdict", "UNKNOWN")
+        confidence = result.get("confidence", 0.0)
+        
+        # Cache result
+        try:
+            agent_instance.cache_result(
+                claim=f"Image-based: {verdict}",
+                verdict=verdict,
+                confidence=confidence,
+                evidence_count=len(result.get("evaluations", [])),
+                session_id=session_id
+            )
+        except Exception as e:
+            logger.warning(f"Failed to cache image result: {str(e)}")
+        
+        return report
+        
+    except Exception as e:
+        logger.warning(f"Error processing image: {str(e)}")
+        return f"❌ Error processing image: {str(e)[:200]}"
+
+
+def get_stats() -> str:
+    """Get system statistics"""
+    try:
+        _, memory_instance = initialize_agent()
+        
         stats = memory_instance.get_all_stats()
         stats_text = f"""
 ### 📊 System Statistics
@@ -232,6 +288,7 @@ def get_stats() -> str:
         
         return stats_text
     except Exception as e:
+        logger.warning(f"Error getting stats: {str(e)}")
         return f"Could not load statistics: {str(e)}"
 
 
@@ -292,7 +349,7 @@ def chat_interface(message: str, history: list) -> tuple:
         history[-1][1] = formatted_response
         
     except Exception as e:
-        logger.exception(f"Error processing request: {str(e)}")
+        logger.warning(f"Error processing request: {str(e)}")
         history[-1][1] = f"❌ Error: {str(e)[:200]}\n\nPlease try again with different input."
     
     return history, ""
@@ -387,125 +444,187 @@ def create_interface():
         - 🌐 Real-time Google Search
         - 💾 Smart memory cache
         - 🤖 Multi-agent pipeline
+        - 📸 Image-based verification (NEW!)
         """)
         
-        with gr.Row():
-            with gr.Column(scale=3):
-                # Main chat interface
-                gr.Markdown("### 💬 Verify News")
-                
-                with gr.Group():
-                    chatbot = gr.Chatbot(
-                        label="Chat History",
-                        height=400,
-                        show_label=True,
-                        render_markdown=True
+        with gr.Tab("💬 Text Verification"):
+            with gr.Row():
+                with gr.Column(scale=3):
+                    # Main chat interface
+                    gr.Markdown("### 💬 Verify News")
+                    
+                    with gr.Group():
+                        chatbot = gr.Chatbot(
+                            label="Chat History",
+                            height=400,
+                            show_label=True,
+                            render_markdown=True
+                        )
+                        
+                        with gr.Row():
+                            msg = gr.Textbox(
+                                label="Enter news text or URL",
+                                placeholder="Paste news article text or URL here...",
+                                lines=3,
+                                scale=4
+                            )
+                            submit_btn = gr.Button(
+                                "🔍 Verify",
+                                scale=1,
+                                size="lg"
+                            )
+                        
+                        with gr.Row():
+                            clear_btn = gr.Button("🗑️ Clear History", scale=1)
+                            example_btn = gr.Button("📝 Try Example", scale=1)
+                    
+                    # Submit event
+                    submit_btn.click(
+                        chat_interface,
+                        inputs=[msg, chatbot],
+                        outputs=[chatbot, msg]
                     )
                     
-                    with gr.Row():
-                        msg = gr.Textbox(
-                            label="Enter news text or URL",
-                            placeholder="Paste news article text or URL here...",
-                            lines=3,
-                            scale=4
-                        )
-                        submit_btn = gr.Button(
-                            "🔍 Verify",
-                            scale=1,
-                            size="lg"
-                        )
+                    # Clear history
+                    clear_btn.click(
+                        clear_history,
+                        outputs=chatbot
+                    )
                     
-                    with gr.Row():
-                        clear_btn = gr.Button("🗑️ Clear History", scale=1)
-                        example_btn = gr.Button("📝 Try Example", scale=1)
+                    # Load example
+                    def load_example():
+                        example = random.choice([
+                            "The Earth revolves around the Sun once every 365 days.",
+                            "Honey never spoils and can remain edible for thousands of years.",
+                            "Scientists have discovered a vaccine that permanently eliminates the common cold.",
+                            "Drinking eight glasses of water per day prevents all diseases.",
+                            "Lightning can strike the same place more than once.",
+                            "Humans can survive for weeks without sleep with no negative health effects."
+                        ])
+                        return example
+                    
+                    example_btn.click(
+                        load_example,
+                        outputs=msg
+                    )
                 
-                # Submit event
-                submit_btn.click(
-                    chat_interface,
-                    inputs=[msg, chatbot],
-                    outputs=[chatbot, msg]
+                with gr.Column(scale=1):
+                    # Sidebar with statistics
+                    gr.Markdown("### 📊 Statistics")
+                    
+                    stats_output = gr.Markdown(label="System Stats")
+                    
+                    # Add a button to refresh stats
+                    refresh_btn = gr.Button("🔄 Refresh Stats")
+                    refresh_btn.click(
+                        get_stats,
+                        outputs=stats_output
+                    )
+                    
+                    # Load stats on startup
+                    demo.load(
+                        get_stats,
+                        outputs=stats_output
+                    )
+                    
+                    # Add info section
+                    gr.Markdown("""
+                    ### ℹ️ How It Works
+                    
+                    1. **Extract Claims** - Identifies verifiable statements
+                    2. **Search Evidence** - Queries FAISS + Google
+                    3. **Evaluate Sources** - Analyzes supporting/refuting evidence
+                    4. **Generate Verdict** - Aggregates results
+                    5. **Cache Results** - Stores for instant future lookups
+                    
+                    ### ⚡ Performance
+                    
+                    - **Cache Hit:** ~50-200ms
+                    - **Fresh Verification:** ~3-10 seconds
+                    - **Average:** ~2-5 seconds
+                    """)
+            
+            # Keyboard shortcut
+            msg.submit(
+                chat_interface,
+                inputs=[msg, chatbot],
+                outputs=[chatbot, msg]
+            )
+        
+        # NEW: Image Verification Tab
+        with gr.Tab("📸 Image Verification"):
+            gr.Markdown("### Verify Claims from Images")
+            
+            with gr.Group():
+                image_input = gr.Image(
+                    label="Upload Image",
+                    type="filepath",
+                    scale=1
                 )
                 
-                # Clear history
-                clear_btn.click(
-                    clear_history,
-                    outputs=chatbot
+                image_verify_btn = gr.Button(
+                    "🔍 Verify Image",
+                    size="lg"
                 )
                 
-                # Load example
-                def load_example():
-                    example = random.choice([
-                        "The Earth revolves around the Sun once every 365 days.",
-                        "Honey never spoils and can remain edible for thousands of years.",
-                        "Scientists have discovered a vaccine that permanently eliminates the common cold.",
-                        "Drinking eight glasses of water per day prevents all diseases.",
-                        "Lightning can strike the same place more than once.",
-                        "Humans can survive for weeks without sleep with no negative health effects."
-                    ])
-                    return example
-                
-                example_btn.click(
-                    load_example,
-                    outputs=msg
+                image_output = gr.Markdown(
+                    label="Verification Result"
                 )
             
-            with gr.Column(scale=1):
-                # Sidebar with statistics
-                gr.Markdown("### 📊 Statistics")
-                
-                stats_output = gr.Markdown(label="System Stats")
-                
-                # Add a button to refresh stats
-                refresh_btn = gr.Button("🔄 Refresh Stats")
-                refresh_btn.click(
-                    get_stats,
-                    outputs=stats_output
-                )
-                
-                # Load stats on startup
-                demo.load(
-                    get_stats,
-                    outputs=stats_output
-                )
-                
-                # Add info section
-                gr.Markdown("""
-                ### ℹ️ How It Works
-                
-                1. **Extract Claims** - Identifies verifiable statements
-                2. **Search Evidence** - Queries FAISS + Google
-                3. **Evaluate Sources** - Analyzes supporting/refuting evidence
-                4. **Generate Verdict** - Aggregates results
-                5. **Cache Results** - Stores for instant future lookups
-                
-                ### ⚡ Performance
-                
-                - **Cache Hit:** ~50-200ms
-                - **Fresh Verification:** ~3-10 seconds
-                - **Average:** ~2-5 seconds
-                """)
+            image_verify_btn.click(
+                process_image_verification,
+                inputs=image_input,
+                outputs=image_output
+            )
         
-        # Keyboard shortcut
-        msg.submit(
-            chat_interface,
-            inputs=[msg, chatbot],
-            outputs=[chatbot, msg]
-        )
+        # About Tab
+        with gr.Tab("ℹ️ About"):
+            gr.Markdown("""
+            ## About Fake News Detection Agent
+            
+            This is an AI-powered fact-checking system built with:
+            
+            - **Google ADK** - Multi-agent orchestration framework
+            - **Gemini 2.5 Flash** - LLM for reasoning and evaluation
+            - **FAISS** - Vector database for semantic search
+            - **SQLite** - Persistent memory management
+            
+            ### Features
+            
+            ✅ Multi-agent pipeline with specialized components
+            ✅ Dual-source verification (FAISS + Google Search)
+            ✅ Smart memory caching for 700x faster repeat queries
+            ✅ Image-based claim extraction and verification
+            ✅ Real-time web search integration
+            ✅ Confidence scoring and verdict distribution
+            
+            ### Capstone Project
+            
+            Part of the 5-Day AI Agents Intensive with Google (Nov 2025)
+            """)
     
     return demo
 
 
 def main():
     """Main entry point"""
-    demo = create_interface()
-    
-    # Launch the interface
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=8000,
-        share=False,
-        show_error=True
-    )
+    try:
+        print("🚀 Initializing Fake News Detection Agent UI...")
+        demo = create_interface()
+        
+        # Launch the interface
+        print("📍 Starting server at http://0.0.0.0:8000")
+        demo.launch(
+            server_name="0.0.0.0",
+            server_port=8000,
+            share=False,
+            show_error=True
+        )
+    except Exception as e:
+        print(f"❌ Error starting UI: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

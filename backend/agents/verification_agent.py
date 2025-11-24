@@ -1,5 +1,5 @@
 # backend/agents/verification_agent.py
-"""Evidence retrieval and evaluation with improved API integration."""
+"""Evidence retrieval and evaluation with IMPROVED evaluation logic."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tools.faiss_tool import faiss_search
 from tools.google_search_tool import google_search_tool
@@ -28,7 +28,6 @@ class VerificationAgent:
         """Run Google Search for the claim with improved query handling."""
         try:
             logger.warning("🔎 Google Search: %s", claim[:60])
-            # Extract key terms from claim for better search
             result = google_search_tool(query=claim, top_k=5)
             logger.warning("   → Found %d web results", len(result))
             return result
@@ -68,13 +67,19 @@ class VerificationAgent:
         return results
 
     def _build_evaluation_prompt(self, claim, evidence_items):
-        """Build a robust evaluation prompt with detailed instructions."""
+        """Build an IMPROVED evaluation prompt with explicit refutation guidance."""
         evidence_text = "\n\n".join([
             f"[Evidence {i}]\n{item.get('content', str(item))[:500]}"
             for i, item in enumerate(evidence_items, 1)
         ])
         
-        prompt = f"""You are a fact-checking expert. Analyze each piece of evidence and determine if it SUPPORTS, REFUTES, or provides NOT_ENOUGH_INFO about the claim.
+        prompt = f"""You are an expert fact-checker. Evaluate each piece of evidence against the claim.
+
+CRITICAL: Watch for:
+1. Direct REFUTATIONS (statements that contradict the claim)
+2. Contradictory information (e.g., "X is alive" vs claim "X is dead")
+3. Explicit denials or corrections
+4. Official confirmations that negate the claim
 
 CLAIM TO VERIFY:
 "{claim}"
@@ -83,9 +88,15 @@ EVIDENCE ITEMS:
 {evidence_text}
 
 EVALUATION CRITERIA:
-- SUPPORTS: Evidence clearly confirms the claim is true
-- REFUTES: Evidence clearly shows the claim is false or contradicts it
-- NOT_ENOUGH_INFO: Evidence is irrelevant or doesn't address the claim
+- SUPPORTS: Evidence directly confirms the claim is TRUE
+- REFUTES: Evidence clearly shows the claim is FALSE or explicitly contradicts it
+- NOT_ENOUGH_INFO: Evidence is vague, irrelevant, or doesn't directly address the claim
+
+IMPORTANT REFUTATION RULES:
+- If evidence says "X is alive" and claim says "X is dead" → REFUTES
+- If evidence says "This is false/debunked/hoax" → REFUTES the claim
+- If evidence explicitly denies the claim → REFUTES
+- If evidence is too vague or doesn't directly address → NOT_ENOUGH_INFO (do not guess)
 
 Provide ONLY the evaluation labels in this format, one per line:
 Evidence 1: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
@@ -98,14 +109,13 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
 
     def batch_evaluate_evidence(self, claim, evidence_items):
         """
-        Batch evaluate multiple evidence items in ONE API call with improved logic.
-        This reduces API calls from N to 1!
+        Batch evaluate multiple evidence items in ONE API call with IMPROVED logic.
         """
         if not evidence_items:
             logger.warning("❌ No evidence items to evaluate")
             return []
         
-        # Limit to first 10 items to save tokens but be more thorough
+        # Limit to first 10 items
         evidence_items = evidence_items[:10]
         
         try:
@@ -130,12 +140,34 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
                 label = "NOT_ENOUGH_INFO"
                 line_upper = line.upper()
                 
-                # More robust label extraction
-                if "SUPPORT" in line_upper and "NOT" not in line_upper:
-                    label = "SUPPORTS"
-                elif "REFUTE" in line_upper or "FALSE" in line_upper and "NOT" not in line_upper:
+                # ===== IMPROVED LABEL EXTRACTION =====
+                
+                # REFUTES - Check for explicit refutation indicators
+                if "REFUTE" in line_upper:
                     label = "REFUTES"
-                elif "NOT_ENOUGH" in line_upper or "NOT ENOUGH" in line_upper:
+                elif "FALSE" in line_upper and "NOT" not in line_upper:
+                    label = "REFUTES"
+                elif "CONTRADICTS" in line_upper:
+                    label = "REFUTES"
+                elif "DENIES" in line_upper:
+                    label = "REFUTES"
+                elif "DEBUNK" in line_upper:
+                    label = "REFUTES"
+                elif "HOAX" in line_upper:
+                    label = "REFUTES"
+                
+                # SUPPORTS - Check for explicit support indicators
+                elif "SUPPORT" in line_upper and "NOT" not in line_upper:
+                    label = "SUPPORTS"
+                elif "CONFIRMS" in line_upper:
+                    label = "SUPPORTS"
+                elif "AFFIRMS" in line_upper:
+                    label = "SUPPORTS"
+                elif "VERIFY" in line_upper and "CANNOT" not in line_upper:
+                    label = "SUPPORTS"
+                
+                # NOT_ENOUGH_INFO - Default for anything unclear
+                elif "NOT_ENOUGH" in line_upper or "INSUFFICIENT" in line_upper:
                     label = "NOT_ENOUGH_INFO"
                 
                 label_count[label] += 1
@@ -155,7 +187,6 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
             
         except Exception as e:
             logger.warning("⚠️  Batch evaluation failed: %s", str(e)[:100])
-            # Fallback: Try to evaluate manually
             return self._fallback_evaluate(claim, evidence_items)
 
     def _fallback_evaluate(self, claim, evidence_items):
@@ -165,22 +196,42 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
         evaluations = []
         claim_lower = claim.lower()
         
+        # Extract key terms from claim
+        key_terms = [term.strip() for term in claim_lower.split() if len(term) > 3]
+        
+        # Check for refutation indicators in the claim itself
+        claim_death_related = any(word in claim_lower for word in ["dead", "death", "died", "killing", "killed"])
+        claim_alive_related = any(word in claim_lower for word in ["alive", "living", "lives"])
+        
         for item in evidence_items:
             content = str(item.get('content', '')).lower()
             label = "NOT_ENOUGH_INFO"
             
-            # Extract key terms from claim
-            key_terms = [term.strip() for term in claim_lower.split() if len(term) > 3]
-            matching_terms = sum(1 for term in key_terms if term in content)
+            # ===== IMPROVED FALLBACK LOGIC =====
             
-            if matching_terms > 0:
-                # Check for negation words that might indicate refutation
-                negation_words = ["not", "false", "deny", "refute", "wrong", "incorrect", "contradicts"]
-                has_negation = any(neg in content for neg in negation_words)
-                
-                if has_negation and matching_terms < 3:
+            # Check for explicit refutations
+            refutation_phrases = [
+                "is alive",
+                "not dead",
+                "not true",
+                "false claim",
+                "hoax",
+                "debunk",
+                "completely false",
+                "no evidence",
+                "unsubstantiated",
+                "unfounded"
+            ]
+            
+            if any(phrase in content for phrase in refutation_phrases):
+                if claim_death_related and "alive" in content:
                     label = "REFUTES"
-                else:
+                elif "debunk" in content or "hoax" in content or "false" in content:
+                    label = "REFUTES"
+            
+            # Check for supporting terms
+            elif any(term in content for term in key_terms):
+                if not any(word in content for word in ["deny", "false", "not", "refute"]):
                     label = "SUPPORTS"
             
             evaluations.append({
@@ -189,6 +240,7 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
                 "raw": "Fallback evaluation"
             })
         
+        logger.warning("⚠️  Fallback complete: %d evaluations", len(evaluations))
         return evaluations
 
     def run(self, claim):
@@ -212,7 +264,6 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
         
         if not flat:
             logger.warning("⚠️  No evidence retrieved, using fallback")
-            # Return a neutral evaluation when no evidence is found
             return {
                 "retrieved": retrieved, 
                 "evaluations": [{

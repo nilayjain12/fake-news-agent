@@ -6,7 +6,7 @@ from config import get_logger
 logger = get_logger(__name__)
 
 def aggregate_evaluations(evaluations):
-    """Aggregate evaluations with intelligent, robust scoring."""
+    """Aggregate evaluations with intelligent, robust scoring - IMPROVED to handle refutations."""
     logger.warning("📈 Aggregating %d evaluations", len(evaluations))
     
     if not evaluations:
@@ -50,10 +50,23 @@ def aggregate_evaluations(evaluations):
     
     logger.warning("   NOT_ENOUGH_INFO: %d items (neutral, not scored)", len(neutral_evals))
     
+    # ===== IMPROVED SCORING LOGIC =====
+    
     # Calculate scores - ONLY from SUPPORTS and REFUTES
-    # NOT_ENOUGH_INFO does NOT contribute to the score
     support_score = sum(w for w, _ in supports_evals)
     refute_score = sum(w for w, _ in refutes_evals)
+    
+    # CRITICAL: If there are ANY refutations, they carry significant weight
+    # A single strong refutation (from web/current source) can outweigh multiple supports
+    if refutes_evals:
+        # Check if refutation comes from web (current, real-time info)
+        web_refutations = sum(w for w, src in refutes_evals if src in ["web", "google_search"])
+        
+        # If we have web refutations, trust them heavily (they're current facts)
+        if web_refutations > 0:
+            logger.warning("⚠️  CRITICAL: Found refutation from web source (current info)")
+            # Boost refutation credibility - web sources are MORE authoritative for current facts
+            refute_score = refute_score * 1.5
     
     # Raw score: positive for supports, negative for refutes
     raw_score = support_score - refute_score
@@ -113,13 +126,27 @@ def aggregate_evaluations(evaluations):
 
 
 def _generate_verdict_and_confidence(normalized_score, support_count, refute_count, neutral_count):
-    """Generate verdict and confidence based on evidence."""
+    """Generate verdict and confidence based on evidence - IMPROVED to handle refutations."""
     
-    # Check if evidence is overwhelming in one direction
     total_evidence = support_count + refute_count
     
-    # If mostly refuting evidence
-    if refute_count > support_count * 1.5:  # At least 1.5x more refutes
+    # ===== REFUTATION TAKES PRIORITY =====
+    
+    # If there are ANY refutations, they are very significant
+    if refute_count > 0:
+        # Even one refutation significantly reduces confidence
+        if normalized_score < -0.5:
+            return "False", 0.85
+        elif normalized_score < -0.2:
+            return "Likely False", 0.70
+        elif normalized_score < 0:
+            return "Likely False", 0.60
+        else:
+            # Mixed evidence, but refutations exist - still lean toward false
+            return "Mixed Evidence / Likely False", 0.55
+    
+    # If mostly refuting evidence (but no refutes found - shouldn't happen)
+    if refute_count > support_count * 1.5:
         if normalized_score < -0.8:
             return "False", 0.95
         elif normalized_score < -0.5:
@@ -130,7 +157,7 @@ def _generate_verdict_and_confidence(normalized_score, support_count, refute_cou
             return "Likely False", 0.60
     
     # If mostly supporting evidence
-    elif support_count > refute_count * 1.5:  # At least 1.5x more supports
+    elif support_count > refute_count * 1.5:
         if normalized_score > 0.8:
             return "True", 0.95
         elif normalized_score > 0.5:
@@ -163,6 +190,10 @@ def calculate_confidence_from_evidence_quality(support_count, refute_count, neut
     
     # Base confidence from normalized score magnitude
     base_confidence = min(abs(normalized_score), 1.0)
+    
+    # CRITICAL: Refutations boost confidence (they're definitive)
+    if refute_count > 0:
+        base_confidence = min(base_confidence + 0.30, 1.0)
     
     # Boost if there's strong consensus (one direction dominates)
     if support_count > refute_count * 2:
