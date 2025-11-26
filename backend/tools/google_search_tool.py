@@ -1,17 +1,15 @@
+# backend/tools/google_search_tool.py (SIMPLIFIED)
 """
-Google Search tool wrapper using Google ADK Agent.
-Proper implementation with correct method calls.
+Simplified Google Search tool - Returns JSON only.
 """
 
 import os
 import asyncio
+import json
 from google.adk.agents import Agent
 from google.adk.tools import google_search
 from config import GEMINI_API_KEY, get_logger
 from google.adk.runners import InMemoryRunner
-import json
-
-logger = get_logger(__name__)
 
 logger = get_logger(__name__)
 
@@ -19,76 +17,69 @@ logger = get_logger(__name__)
 os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
 
 
-# ==================== Public API ====================
-
 def google_search_tool(query: str, top_k: int = 5) -> list:
     """
-    Execute Google search using ADK Agent with google_search tool.
-    Falls back to direct Gemini if Agent methods fail.
+    Execute Google search using ADK Agent and return JSON results directly.
     
     Args:
         query: Search query string
         top_k: Number of results to return (default: 5)
     
     Returns:
-        List of search results as dictionaries with proper structure
+        List of search result dictionaries with keys: rank, title, content, url, relevance_score
     """
-    # Create the agent FIRST
-    google_search_agent = Agent(
-        name="GoogleSearchAgent",
-        model='gemini-2.0-flash',
-        tools=[google_search]  # Give the agent its tool
-    )
-    
-    # THEN create the runner with the agent
-    runner = InMemoryRunner(google_search_agent)
-
-    prompt = f"""You have access to the Google Search tool. Your task is to search for information about this query and provide the results.
-
-QUERY: "{query}"
-
-INSTRUCTIONS:
-1. Use your google_search tool to find latest information about the query
-2. Return the search results in JSON format
-3. Include up to {top_k} results
-4. For each result include: title, snippet/content, url, and relevance
-
-RESPONSE FORMAT:
-Return ONLY a valid JSON array with this structure:
-[
-  {{
-    "rank": 1,
-    "title": "Result Title",
-    "content": "snippet or summary",
-    "url": "https://example.com",
-    "relevance_score": 0.95
-  }},
-  {{
-    "rank": 2,
-    "title": "Another Result",
-    "content": "snippet text",
-    "url": "https://example.com",
-    "relevance_score": 0.87
-  }}
-]
-
-IMPORTANT:
-- Return ONLY the JSON array, no other text
-- Ensure all URLs are complete and valid
-- Prioritize results that directly address the query"""
-
-    full_prompt = prompt + "\n\nUser Claim: " + query
-
     logger.warning("🔍 google_search_tool called: %s", query[:60])
     
     try:
-        # Run async function synchronously
-        response = asyncio.run(runner.run_debug(full_prompt))
+        # Create the agent
+        google_search_agent = Agent(
+            name="GoogleSearchAgent",
+            model='gemini-2.0-flash',
+            tools=[google_search]
+        )
         
-        # Parse the response - it may be an Event object or string
-        results = _parse_agent_response(response)
+        # Create the runner
+        runner = InMemoryRunner(google_search_agent)
+
+        # Prompt that FORCES JSON-only output
+        prompt = f"""You are a search results formatter. Your ONLY job is to return valid JSON.
+
+SEARCH QUERY: {query}
+
+INSTRUCTIONS:
+1. Use the google_search tool to find information
+2. Format results as a JSON array
+3. Return ONLY the JSON array, nothing else - no markdown, no explanations
+4. Include {top_k} results maximum
+5. Each result must have: rank, title, content, url, relevance_score
+
+OUTPUT EXACTLY THIS FORMAT (no other text):
+[{{"rank": 1, "title": "...", "content": "...", "url": "...", "relevance_score": 0.95}}, ...]"""
+
+        logger.warning("🔍 Executing ADK agent search...")
         
-        logger.warning("✅ Returning %d search results", len(results))
+        # Run the agent
+        response = asyncio.run(runner.run_debug(prompt))
+        
+        # Extract the agent's final output
+        agent_output = response.final_output if hasattr(response, 'final_output') else str(response)
+        
+        logger.warning("📦 Raw agent output type: %s", type(agent_output).__name__)
+        
+        # Parse JSON from agent output
+        results = _parse_json_safely(agent_output)
+        
+        if not results:
+            logger.warning("⚠️  No valid JSON found in agent output")
+            return []
+        
+        logger.warning("✅ Google Search returned %d results", len(results))
+        for i, result in enumerate(results[:5], 1):
+            logger.warning("   [%d] %s | Score: %.2f", 
+                         i, 
+                         result.get('title', 'Unknown')[:50],
+                         result.get('relevance_score', 0))
+        
         return results
         
     except Exception as e:
@@ -96,143 +87,47 @@ IMPORTANT:
         return []
 
 
-def _parse_agent_response(response) -> list:
+def _parse_json_safely(response_str) -> list:
     """
-    Parse the response from the ADK Agent runner.
-    Handles various response types: Event objects, strings, dicts, lists.
-    
-    Args:
-        response: The raw response from runner.run_debug()
-        
-    Returns:
-        List of search result dictionaries
+    Safely parse JSON from response.
+    Converts response to string if needed, then extracts JSON array.
     """
-    try:
-        # If it's already a list of dicts, return as-is
-        if isinstance(response, list):
-            return _validate_results(response)
-        
-        # If it's a dict, wrap in list
-        if isinstance(response, dict):
-            if "results" in response:
-                return _validate_results(response["results"])
-            return _validate_results([response])
-        
-        # If it's an Event object or has agent_output, extract the output
-        if hasattr(response, 'agent_output'):
-            output = response.agent_output
-            if isinstance(output, str):
-                return _parse_json_string(output)
-            elif isinstance(output, list):
-                return _validate_results(output)
-            elif isinstance(output, dict):
-                if "results" in output:
-                    return _validate_results(output["results"])
-                return _validate_results([output])
-        
-        # If it's an Event with final_output
-        if hasattr(response, 'final_output'):
-            output = response.final_output
-            if isinstance(output, str):
-                return _parse_json_string(output)
-            elif isinstance(output, list):
-                return _validate_results(output)
-            elif isinstance(output, dict):
-                return _validate_results([output])
-        
-        # If it's a string, try to parse as JSON
-        if isinstance(response, str):
-            return _parse_json_string(response)
-        
-        # Last resort: convert to string and try to parse
-        response_str = str(response)
-        logger.warning("⚠️  Response is non-standard type (%s), attempting string parse", type(response).__name__)
-        return _parse_json_string(response_str)
-        
-    except Exception as e:
-        logger.warning("❌ Error parsing response: %s", str(e)[:100])
+    if not response_str:
         return []
-
-
-def _parse_json_string(response_str: str) -> list:
-    """
-    Extract and parse JSON from response string.
-    Handles markdown code blocks and nested JSON.
-    """
+    
+    # Convert to string if not already
+    if not isinstance(response_str, str):
+        response_str = str(response_str)
+    
     try:
-        # Try direct JSON parse
+        # Try direct JSON parse first
+        logger.warning("🔄 Parsing JSON response...")
+        result = json.loads(response_str)
+        
+        # Validate it's a list
+        if isinstance(result, list):
+            logger.warning("✅ Valid JSON array parsed")
+            return result
+        
+        return []
+        
+    except json.JSONDecodeError:
+        # If direct parse fails, try to extract JSON from string
+        logger.warning("⚠️  Direct parse failed, attempting extraction...")
+        
+        # Remove markdown code blocks if present
+        if "```json" in response_str:
+            response_str = response_str.split("```json")[1].split("```")[0]
+        elif "```" in response_str:
+            response_str = response_str.split("```")[1].split("```")[0]
+        
         try:
-            result = json.loads(response_str)
+            result = json.loads(response_str.strip())
             if isinstance(result, list):
-                return _validate_results(result)
-            elif isinstance(result, dict):
-                if "results" in result:
-                    return _validate_results(result["results"])
-                return _validate_results([result])
+                logger.warning("✅ JSON extracted from markdown")
+                return result
         except json.JSONDecodeError:
             pass
         
-        # Extract JSON from markdown code blocks
-        if "```json" in response_str:
-            json_str = response_str.split("```json")[1].split("```")[0].strip()
-            result = json.loads(json_str)
-            if isinstance(result, list):
-                return _validate_results(result)
-            elif isinstance(result, dict):
-                if "results" in result:
-                    return _validate_results(result["results"])
-                return _validate_results([result])
-        
-        # Extract JSON from plain code blocks
-        if "```" in response_str:
-            json_str = response_str.split("```")[1].split("```")[0].strip()
-            result = json.loads(json_str)
-            if isinstance(result, list):
-                return _validate_results(result)
-            elif isinstance(result, dict):
-                if "results" in result:
-                    return _validate_results(result["results"])
-                return _validate_results([result])
-        
-        # Look for JSON array pattern
-        import re
-        json_match = re.search(r'\[\s*\{.*\}\s*\]', response_str, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            result = json.loads(json_str)
-            return _validate_results(result)
-        
-        logger.warning("❌ Could not find valid JSON in response")
+        logger.warning("❌ Could not parse JSON")
         return []
-        
-    except Exception as e:
-        logger.warning("❌ JSON parse error: %s", str(e)[:100])
-        return []
-
-
-def _validate_results(results: list) -> list:
-    """
-    Validate and normalize search results.
-    Ensures each result has required fields.
-    """
-    validated = []
-    
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        
-        # Ensure required fields exist
-        validated_result = {
-            "rank": result.get("rank", len(validated) + 1),
-            "title": result.get("title", "Unknown Source"),
-            "content": result.get("content") or result.get("snippet", ""),
-            "url": result.get("url", ""),
-            "relevance_score": result.get("relevance_score", 0.5),
-            "_source": "web"  # Mark as web source
-        }
-        
-        # Only include if it has meaningful content
-        if validated_result["url"] or validated_result["content"]:
-            validated.append(validated_result)
-    
-    return validated
