@@ -1,39 +1,63 @@
 # backend/agents/verification_agent.py
-"""Evidence retrieval and evaluation with IMPROVED evaluation logic."""
+"""Evidence retrieval and evaluation with SEMANTIC RANKING."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tools.faiss_tool import faiss_search
 from tools.google_search_tool import google_search_tool
+from tools.semantic_ranker import SemanticRanker
 from google import genai
 from config import GEMINI_API_KEY, ADK_MODEL_NAME, get_logger
 import os
-import time
-import json
 
 logger = get_logger(__name__)
-
-# Set up the Gemini client
 os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 class VerificationAgent:
-    """Runs evidence retrieval and batches evaluations to minimize API calls."""
+    """Runs evidence retrieval with semantic ranking for better accuracy."""
     
     def __init__(self, top_k: int = 5):
         self.top_k = top_k
         self.model = ADK_MODEL_NAME
-        logger.warning("🔍 VerificationAgent initialized (top_k=%d)", top_k)
+        self.ranker = SemanticRanker()  # Initialize ranker
+        logger.warning("🔍 VerificationAgent initialized (top_k=%d) with semantic ranking", top_k)
 
     def _run_web_search(self, claim):
-        """Run Google Search for the claim with improved query handling."""
-        try:
-            logger.warning("🔎 Google Search: %s", claim[:60])
-            result = google_search_tool(query=claim, top_k=5)
-            logger.warning("   → Found %d web results", len(result))
-            return result
-        except Exception as e:
-            logger.warning("⚠️  Web search failed: %s", str(e)[:50])
-            return []
+            """Run Google Search (now with semantic filtering via ADK Agent)."""
+            try:
+                logger.warning("🔍 Google Search (ADK Agent): %s", claim[:60])
+                
+                # Now uses ADK Agent with semantic filtering
+                result = google_search_tool(query=claim, top_k=5)
+                
+                # Ensure result is a list
+                if not isinstance(result, list):
+                    logger.warning("âš ï¸  Web search returned non-list type: %s", type(result).__name__)
+                    return []
+                
+                logger.warning("   ✅ Found %d semantically relevant results", len(result))
+                
+                # Validate and log relevance scores
+                validated_results = []
+                for i, res in enumerate(result, 1):
+                    # Ensure res is a dict with required fields
+                    if not isinstance(res, dict):
+                        logger.warning("   [%d] Skipping non-dict result: %s", i, type(res).__name__)
+                        continue
+                    
+                    relevance_score = res.get('relevance_score', 0)
+                    title = res.get('title', 'N/A')
+                    
+                    logger.warning("   [%d] Relevance: %.2f | %s", i, relevance_score, title[:60])
+                    validated_results.append(res)
+                
+                return validated_results
+                
+            except Exception as e:
+                logger.warning("âš ï¸  Web search failed: %s", str(e)[:50])
+                import traceback
+                logger.warning("   Traceback: %s", traceback.format_exc()[:200])
+                return []
 
     def _run_faiss(self, claim):
         """Run FAISS search for the claim."""
@@ -47,7 +71,7 @@ class VerificationAgent:
             return []
 
     def retrieve_all(self, claim):
-        """Run retrievals in parallel (local ops, no API calls)."""
+        """Run retrievals in parallel and rank results."""
         logger.warning("🌐 Retrieving evidence from FAISS + Google...")
         results = {"faiss": [], "web": []}
         
@@ -66,61 +90,69 @@ class VerificationAgent:
         
         return results
 
-    def _build_evaluation_prompt(self, claim, evidence_items):
-        """Build an IMPROVED evaluation prompt with explicit refutation guidance."""
-        evidence_text = "\n\n".join([
-            f"[Evidence {i}]\n{item.get('content', str(item))[:500]}"
-            for i, item in enumerate(evidence_items, 1)
-        ])
+    def retrieve_and_rank(self, claim):
+        """
+        NEW METHOD: Retrieve all evidence and rank by semantic relevance.
         
-        prompt = f"""You are an expert fact-checker. Evaluate each piece of evidence against the claim.
-
-CRITICAL: Watch for:
-1. Direct REFUTATIONS (statements that contradict the claim)
-2. Contradictory information (e.g., "X is alive" vs claim "X is dead")
-3. Explicit denials or corrections
-4. Official confirmations that negate the claim
-
-CLAIM TO VERIFY:
-"{claim}"
-
-EVIDENCE ITEMS:
-{evidence_text}
-
-EVALUATION CRITERIA:
-- SUPPORTS: Evidence directly confirms the claim is TRUE
-- REFUTES: Evidence clearly shows the claim is FALSE or explicitly contradicts it
-- NOT_ENOUGH_INFO: Evidence is vague, irrelevant, or doesn't directly address the claim
-
-IMPORTANT REFUTATION RULES:
-- If evidence says "X is alive" and claim says "X is dead" → REFUTES
-- If evidence says "This is false/debunked/hoax" → REFUTES the claim
-- If evidence explicitly denies the claim → REFUTES
-- If evidence is too vague or doesn't directly address → NOT_ENOUGH_INFO (do not guess)
-
-Provide ONLY the evaluation labels in this format, one per line:
-Evidence 1: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
-Evidence 2: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
-[etc...]
-
-IMPORTANT: Do NOT include any explanation, just the labels."""
+        Returns: (ranked_evidence, retrieval_metadata)
+        """
+        logger.warning("📊 Starting retrieve-and-rank process...")
         
-        return prompt
+        # Step 1: Retrieve from both sources
+        retrieved = self.retrieve_all(claim)
+        
+        # Step 2: Combine all results
+        all_results = []
+        for src, items in retrieved.items():
+            for item in items:
+                if isinstance(item, dict):
+                    item["_source"] = src
+                else:
+                    item = {"content": str(item), "_source": src}
+                all_results.append(item)
+        
+        logger.warning("📦 Combined results: %d total", len(all_results))
+        logger.warning("   FAISS: %d, Google: %d", len(retrieved['faiss']), len(retrieved['web']))
+        
+        if not all_results:
+            logger.warning("⚠️  No results retrieved")
+            return [], {"total_retrieved": 0, "top_k_used": 0}
+        
+        # Step 3: Rank by semantic relevance
+        ranked_evidence, similarities = self.ranker.rank_evidence_by_relevance(
+            query=claim,
+            evidence_items=all_results,
+            top_k=self.top_k,
+            min_similarity=0.5  # Only keep results with 50%+ similarity
+        )
+        
+        # Metadata for logging
+        metadata = {
+            "total_retrieved": len(all_results),
+            "top_k_used": len(ranked_evidence),
+            "retrieval_sources": {
+                "faiss": len(retrieved['faiss']),
+                "google": len(retrieved['web'])
+            },
+            "similarities": similarities,
+            "ranking_applied": True
+        }
+        
+        logger.warning("✅ Ranking complete: %d → %d (selected top %d)", 
+                      len(all_results), len(ranked_evidence), len(ranked_evidence))
+        
+        return ranked_evidence, metadata
 
     def batch_evaluate_evidence(self, claim, evidence_items):
-        """
-        Batch evaluate multiple evidence items in ONE API call with IMPROVED logic.
-        """
+        """Batch evaluate ranked evidence."""
         if not evidence_items:
             logger.warning("❌ No evidence items to evaluate")
             return []
         
-        # Limit to first 10 items
-        evidence_items = evidence_items[:10]
+        evidence_items = evidence_items[:10]  # Limit to first 10
         
         try:
             prompt = self._build_evaluation_prompt(claim, evidence_items)
-            
             logger.warning("🔄 Batch evaluating %d evidence items (1 API call)", len(evidence_items))
             
             response = client.models.generate_content(
@@ -132,7 +164,6 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
             logger.warning("📝 Raw evaluation response: %s", text[:200])
             
             lines = text.strip().split('\n')
-            
             evaluations = []
             label_count = {"SUPPORTS": 0, "REFUTES": 0, "NOT_ENOUGH_INFO": 0}
             
@@ -140,38 +171,19 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
                 label = "NOT_ENOUGH_INFO"
                 line_upper = line.upper()
                 
-                # ===== IMPROVED LABEL EXTRACTION =====
-                
-                # REFUTES - Check for explicit refutation indicators
+                # Extract label
                 if "REFUTE" in line_upper:
                     label = "REFUTES"
                 elif "FALSE" in line_upper and "NOT" not in line_upper:
                     label = "REFUTES"
-                elif "CONTRADICTS" in line_upper:
+                elif "CONTRADICTS" in line_upper or "DENIES" in line_upper or "DEBUNK" in line_upper:
                     label = "REFUTES"
-                elif "DENIES" in line_upper:
-                    label = "REFUTES"
-                elif "DEBUNK" in line_upper:
-                    label = "REFUTES"
-                elif "HOAX" in line_upper:
-                    label = "REFUTES"
-                
-                # SUPPORTS - Check for explicit support indicators
                 elif "SUPPORT" in line_upper and "NOT" not in line_upper:
                     label = "SUPPORTS"
-                elif "CONFIRMS" in line_upper:
+                elif "CONFIRMS" in line_upper or "AFFIRMS" in line_upper:
                     label = "SUPPORTS"
-                elif "AFFIRMS" in line_upper:
-                    label = "SUPPORTS"
-                elif "VERIFY" in line_upper and "CANNOT" not in line_upper:
-                    label = "SUPPORTS"
-                
-                # NOT_ENOUGH_INFO - Default for anything unclear
-                elif "NOT_ENOUGH" in line_upper or "INSUFFICIENT" in line_upper:
-                    label = "NOT_ENOUGH_INFO"
                 
                 label_count[label] += 1
-                
                 evaluations.append({
                     "evidence": item,
                     "label": label,
@@ -189,50 +201,51 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
             logger.warning("⚠️  Batch evaluation failed: %s", str(e)[:100])
             return self._fallback_evaluate(claim, evidence_items)
 
+    def _build_evaluation_prompt(self, claim, evidence_items):
+        """Build evaluation prompt."""
+        evidence_text = "\n\n".join([
+            f"[Evidence {i}]\n"
+            f"Source: {item.get('_source', 'unknown')}\n"
+            f"Content: {item.get('content', str(item))[:300]}"
+            for i, item in enumerate(evidence_items, 1)
+        ])
+        
+        prompt = f"""You are an expert fact-checker. Evaluate each evidence against the claim.
+
+CLAIM: "{claim}"
+
+EVIDENCE ITEMS:
+{evidence_text}
+
+RULES:
+- SUPPORTS: Evidence confirms the claim is TRUE
+- REFUTES: Evidence shows the claim is FALSE or contradicts it
+- NOT_ENOUGH_INFO: Evidence is vague or doesn't address the claim
+
+Response format (labels only, no explanations):
+Evidence 1: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 2: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+..."""
+        
+        return prompt
+
     def _fallback_evaluate(self, claim, evidence_items):
-        """Fallback evaluation using keyword matching when API fails."""
+        """Fallback evaluation using keyword matching."""
         logger.warning("⚠️  Using fallback keyword-based evaluation")
         
         evaluations = []
         claim_lower = claim.lower()
         
-        # Extract key terms from claim
-        key_terms = [term.strip() for term in claim_lower.split() if len(term) > 3]
-        
-        # Check for refutation indicators in the claim itself
-        claim_death_related = any(word in claim_lower for word in ["dead", "death", "died", "killing", "killed"])
-        claim_alive_related = any(word in claim_lower for word in ["alive", "living", "lives"])
-        
         for item in evidence_items:
             content = str(item.get('content', '')).lower()
             label = "NOT_ENOUGH_INFO"
             
-            # ===== IMPROVED FALLBACK LOGIC =====
-            
-            # Check for explicit refutations
-            refutation_phrases = [
-                "is alive",
-                "not dead",
-                "not true",
-                "false claim",
-                "hoax",
-                "debunk",
-                "completely false",
-                "no evidence",
-                "unsubstantiated",
-                "unfounded"
-            ]
-            
-            if any(phrase in content for phrase in refutation_phrases):
-                if claim_death_related and "alive" in content:
-                    label = "REFUTES"
-                elif "debunk" in content or "hoax" in content or "false" in content:
-                    label = "REFUTES"
-            
-            # Check for supporting terms
-            elif any(term in content for term in key_terms):
-                if not any(word in content for word in ["deny", "false", "not", "refute"]):
-                    label = "SUPPORTS"
+            if "alive" in content and "dead" in claim_lower:
+                label = "REFUTES"
+            elif "dead" in content and "dead" in claim_lower:
+                label = "SUPPORTS"
+            elif "died" in content and "death" in claim_lower or "died" in claim_lower:
+                label = "SUPPORTS"
             
             evaluations.append({
                 "evidence": item,
@@ -240,41 +253,32 @@ IMPORTANT: Do NOT include any explanation, just the labels."""
                 "raw": "Fallback evaluation"
             })
         
-        logger.warning("⚠️  Fallback complete: %d evaluations", len(evaluations))
         return evaluations
 
     def run(self, claim):
-        """Run the complete verification process for a claim."""
+        """Run complete verification with semantic ranking."""
         logger.warning("📊 Verifying claim: %s", claim[:60])
         
-        # Retrieve evidence (NO API calls - these are local/cached ops)
-        retrieved = self.retrieve_all(claim)
+        # NEW: Use retrieve_and_rank instead of retrieve_all
+        ranked_evidence, metadata = self.retrieve_and_rank(claim)
         
-        # Flatten evidence items
-        flat = []
-        for src, items in retrieved.items():
-            for it in items:
-                if isinstance(it, dict):
-                    it["_source"] = src
-                else:
-                    it = {"content": str(it), "_source": src}
-                flat.append(it)
+        logger.warning("   → Using %d ranked evidence items", len(ranked_evidence))
         
-        logger.warning("   → Retrieved %d evidence items total", len(flat))
-        
-        if not flat:
-            logger.warning("⚠️  No evidence retrieved, using fallback")
+        if not ranked_evidence:
+            logger.warning("⚠️  No evidence after ranking")
             return {
-                "retrieved": retrieved, 
-                "evaluations": [{
-                    "evidence": {"content": "No evidence found in knowledge base"},
-                    "label": "NOT_ENOUGH_INFO",
-                    "raw": "No evidence"
-                }]
+                "retrieved": {"faiss": [], "web": []},
+                "evaluations": [],
+                "ranking_metadata": metadata
             }
         
-        # Batch evaluate (1 API call instead of N!)
-        evaluations = self.batch_evaluate_evidence(claim, flat)
+        # Batch evaluate ranked evidence
+        evaluations = self.batch_evaluate_evidence(claim, ranked_evidence)
         
         logger.warning("✅ Verification complete with %d evaluations", len(evaluations))
-        return {"retrieved": retrieved, "evaluations": evaluations}
+        
+        return {
+            "retrieved": {"ranked": ranked_evidence},
+            "evaluations": evaluations,
+            "ranking_metadata": metadata
+        }

@@ -8,6 +8,7 @@ from agents.aggregator_and_verdict import aggregate_evaluations
 from config import ADK_MODEL_NAME, get_logger
 from memory.manager import MemoryManager
 import json
+from agents.report_generator import DetailedReportGenerator
 
 logger = get_logger(__name__)
 
@@ -261,68 +262,122 @@ class FactCheckSequentialAgent:
         return input_text
     
     def run_fact_check_pipeline(self, input_text: str) -> dict:
-        """Execute the complete fact-checking pipeline."""
+        """Execute complete fact-checking with detailed reporting - SINGLE CLAIM VERSION."""
         try:
             logger.warning("📋 Starting fact-check pipeline")
             
-            # STEP 1: Extract Claims
-            logger.warning("🔍 Step 1: Extracting claims...")
+            # STEP 1: Extract Single Main Claim
+            logger.warning("🔍 Step 1: Extracting main claim...")
             claims = self.claim_extractor.run(input_text)
             
             if not claims:
                 logger.warning("❌ No claims extracted")
                 return {
                     "claims": [],
-                    "verdicts": [],
-                    "report": "No claims could be extracted from the input."
+                    "detailed_reports": [],
+                    "comprehensive_report": "No verifiable claim could be extracted from your input.",
+                    "overall_verdict": "UNVERIFIED",
+                    "total_claims": 0,
+                    "total_evidence_items": 0
                 }
             
-            logger.warning("✅ Extracted %d claims", len(claims))
+            # IMPORTANT: Take only the FIRST (and should be ONLY) claim
+            main_claim = claims[0]
+            logger.warning("✅ Main claim: %s", main_claim[:80])
             
-            # STEP 2: Verify each claim
-            logger.warning("🔍 Step 2: Verifying claims with FAISS + Google Search...")
-            all_evaluations = []
+            # STEP 2: Verify the Single Claim
+            logger.warning("🔍 Step 2: Verifying claim with FAISS + Google Search...")
+            result = self.verifier.run(main_claim)
+            evaluations = result.get("evaluations", [])
             
-            for claim in claims:
-                logger.warning("   Verifying: %s", claim[:60])
-                result = self.verifier.run(claim)
-                all_evaluations.extend(result.get("evaluations", []))
+            logger.warning("✅ Found %d evidence items", len(evaluations))
             
-            logger.warning("✅ Verified with %d evidence items", len(all_evaluations))
-            
-            # STEP 3: Aggregate results
-            logger.warning("🔍 Step 3: Aggregating results...")
-            if all_evaluations:
-                aggregation = aggregate_evaluations(all_evaluations)
-                verdict = aggregation["verdict"]
-                confidence = abs(aggregation["score"]) if aggregation["score"] != 0 else 0.5
+            # STEP 3: Aggregate Evidence
+            logger.warning("🔍 Step 3: Aggregating evidence...")
+            if evaluations:
+                aggregation = aggregate_evaluations(evaluations)
             else:
-                verdict = "UNVERIFIED"
-                confidence = 0.0
+                aggregation = {
+                    "verdict": "Unverified / No Evidence Found",
+                    "score": 0.0,
+                    "raw_score": 0,
+                    "total_weight": 0,
+                    "confidence": 0.0,
+                    "breakdown": {"SUPPORTS": 0, "REFUTES": 0, "NOT_ENOUGH_INFO": 0}
+                }
             
-            logger.warning("✅ Aggregation complete - Verdict: %s", verdict)
+            logger.warning("✅ Aggregation complete - Verdict: %s", aggregation["verdict"])
             
-            # STEP 4: Generate report
-            report = self._generate_report(claims, verdict, confidence, all_evaluations)
+            # STEP 4: Generate Single Detailed Report
+            logger.warning("🔍 Step 4: Generating detailed report...")
+            report_generator = DetailedReportGenerator()
+            claim_report = report_generator.generate_claim_report(
+                claim=main_claim,
+                evaluations=evaluations,
+                aggregation_result=aggregation
+            )
+            
+            # STEP 5: Generate Comprehensive Report (Single Claim Format)
+            comprehensive_report = report_generator.generate_comprehensive_report_single_claim(
+                main_claim=main_claim,
+                claim_report=claim_report
+            )
+            
+            logger.warning("✅ Pipeline complete")
             
             return {
-                "claims": claims,
-                "verdict": verdict,
-                "confidence": confidence,
-                "evaluations": all_evaluations,
-                "report": report
+                "claims": [main_claim],
+                "detailed_reports": [claim_report],
+                "comprehensive_report": comprehensive_report,
+                "overall_verdict": aggregation["verdict"],
+                "total_claims": 1,
+                "total_evidence_items": len(evaluations)
             }
             
         except Exception as e:
             logger.exception("❌ Pipeline error: %s", e)
             return {
                 "claims": [],
-                "verdict": "ERROR",
-                "confidence": 0.0,
-                "evaluations": [],
-                "report": f"Error during fact-checking: {str(e)[:100]}"
+                "detailed_reports": [],
+                "comprehensive_report": f"Error during fact-checking: {str(e)[:100]}",
+                "overall_verdict": "ERROR",
+                "total_claims": 0,
+                "total_evidence_items": 0
             }
     
+    def _calculate_overall_verdict(self, detailed_reports: list) -> str:
+        """Calculate overall verdict based on all claim verdicts."""
+        if not detailed_reports:
+            return "UNVERIFIED"
+        
+        verdicts = [r["result"]["category"] for r in detailed_reports]
+        
+        true_count = sum(1 for v in verdicts if "true" in v.lower() and "false" not in v.lower())
+        false_count = sum(1 for v in verdicts if "false" in v.lower())
+        mixed_count = len(verdicts) - true_count - false_count
+        
+        if false_count > len(verdicts) * 0.5:
+            return "MOSTLY FALSE"
+        elif true_count > len(verdicts) * 0.5:
+            return "MOSTLY TRUE"
+        elif mixed_count > len(verdicts) * 0.5:
+            return "MIXED EVIDENCE"
+        else:
+            return "INCONCLUSIVE"
+
+    def _generate_report(self, claims: list, verdict: str, confidence: float, evaluations: list) -> str:
+        """Legacy report generation (kept for compatibility)."""
+        logger.warning("⚠️  Using legacy report generation (deprecated)")
+        
+        report = "### Fact-Check Report\n\n"
+        
+        if not claims:
+            return report + "No claims to verify."
+        
+        report += f"**Overall Verdict:** **{verdict}** ({confidence:.1%} confidence)\n\n"
+        
+        return report
+
     def run_fact_check_pipeline_with_image(self, image_path: str) -> dict:
         """Execute fact-checking pipeline starting from image."""
         try:

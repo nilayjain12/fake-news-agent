@@ -4,6 +4,7 @@ from google.adk.tools import FunctionTool
 from loader.embeddings_loader import load_faiss_index
 from config import TOP_K, FAISS_INDEX_PATH, get_logger
 import os
+import datetime
 
 logger = get_logger(__name__)
 
@@ -28,7 +29,7 @@ def _get_db():
 
 
 def faiss_search(query: str, k: int = TOP_K) -> list:
-    """Search the FAISS knowledge base for relevant documents."""
+    """Search FAISS with date-based relevance weighting."""
     logger.warning("🔎 FAISS search: %s", query[:60])
     
     try:
@@ -36,24 +37,41 @@ def faiss_search(query: str, k: int = TOP_K) -> list:
         docs = db.similarity_search(query, k=k)
         
         results = []
+        current_time = datetime.datetime.now()
+        
         for i, doc in enumerate(docs):
             meta = getattr(doc, "metadata", {}) or {}
+            
+            # Try to extract date from metadata
+            doc_date = meta.get("date")
+            age_days = None
+            
+            if doc_date:
+                try:
+                    doc_datetime = datetime.fromisoformat(str(doc_date))
+                    age_days = (current_time - doc_datetime).days
+                except:
+                    pass
+            
+            # Mark old documents
+            is_old = age_days > 90 if age_days else False
+            
             results.append({
                 "rank": i + 1,
                 "content": doc.page_content,
                 "source": meta.get("source", "unknown"),
-                "metadata": meta
+                "metadata": meta,
+                "age_days": age_days,
+                "is_old_source": is_old,  # FLAG for old data
+                "freshness_warning": "⚠️ This source is from an older date" if is_old else ""
             })
         
-        logger.warning("   → Found %d results", len(results))
+        logger.warning("   → Found %d results (with freshness flags)", len(results))
         return results
         
-    except FileNotFoundError as e:
-        logger.warning("❌ FAISS index not found")
-        return [{"error": f"FAISS index not found: {str(e)}", "type": "not_found"}]
     except Exception as e:
         logger.warning("❌ FAISS search error: %s", str(e)[:50])
-        return [{"error": f"FAISS search failed: {str(e)}", "type": "search_error"}]
+        return []
 
 
 faiss_search_tool = FunctionTool(func=faiss_search)
