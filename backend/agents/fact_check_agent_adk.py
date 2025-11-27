@@ -4,10 +4,11 @@ from google.adk.agents import LlmAgent
 from agents.ingestion_agent import IngestionAgent
 from agents.claim_extraction_agent import ClaimExtractionAgent
 from agents.verification_agent import VerificationAgent
-from agents.aggregator_and_verdict import aggregate_evaluations
+from agents.aggregator_and_verdict import AdvancedVerdictAgent, aggregate_evaluations
 from config import ADK_MODEL_NAME, get_logger
 from memory.manager import MemoryManager
 import json
+from agents.report_generator import DetailedReportGenerator
 
 logger = get_logger(__name__)
 
@@ -261,68 +262,186 @@ class FactCheckSequentialAgent:
         return input_text
     
     def run_fact_check_pipeline(self, input_text: str) -> dict:
-        """Execute the complete fact-checking pipeline."""
+        """Execute complete fact-checking with detailed reporting - SINGLE CLAIM VERSION."""
         try:
             logger.warning("📋 Starting fact-check pipeline")
             
-            # STEP 1: Extract Claims
-            logger.warning("🔍 Step 1: Extracting claims...")
+            # STEP 1: Extract Single Main Claim
+            logger.warning("🔍 Step 1: Extracting main claim...")
             claims = self.claim_extractor.run(input_text)
             
             if not claims:
                 logger.warning("❌ No claims extracted")
                 return {
                     "claims": [],
-                    "verdicts": [],
-                    "report": "No claims could be extracted from the input."
+                    "detailed_reports": [],
+                    "comprehensive_report": "No verifiable claim could be extracted from your input.",
+                    "overall_verdict": "UNVERIFIED",
+                    "total_claims": 0,
+                    "total_evidence_items": 0
                 }
             
-            logger.warning("✅ Extracted %d claims", len(claims))
+            main_claim = claims[0]
+            logger.warning("✅ Main claim: %s", main_claim[:80])
             
-            # STEP 2: Verify each claim
-            logger.warning("🔍 Step 2: Verifying claims with FAISS + Google Search...")
-            all_evaluations = []
+            # STEP 2: Verify the Single Claim
+            logger.warning("🔍 Step 2: Verifying claim with FAISS + Google Search...")
+            result = self.verifier.run(main_claim)
+            evaluations = result.get("evaluations", [])
             
-            for claim in claims:
-                logger.warning("   Verifying: %s", claim[:60])
-                result = self.verifier.run(claim)
-                all_evaluations.extend(result.get("evaluations", []))
+            logger.warning("✅ Found %d evidence items", len(evaluations))
             
-            logger.warning("✅ Verified with %d evidence items", len(all_evaluations))
+            # ===== OLD CODE (DELETE THIS SECTION) =====
+            # logger.warning("🔍 Step 3: Aggregating evidence...")
+            # if evaluations:
+            #     aggregation = aggregate_evaluations(evaluations)
+            # else:
+            #     aggregation = {
+            #         "verdict": "Unverified / No Evidence Found",
+            #         "score": 0.0,
+            #         "raw_score": 0,
+            #         "total_weight": 0,
+            #         "confidence": 0.0,
+            #         "breakdown": {"SUPPORTS": 0, "REFUTES": 0, "NOT_ENOUGH_INFO": 0}
+            #     }
             
-            # STEP 3: Aggregate results
-            logger.warning("🔍 Step 3: Aggregating results...")
-            if all_evaluations:
-                aggregation = aggregate_evaluations(all_evaluations)
-                verdict = aggregation["verdict"]
-                confidence = abs(aggregation["score"]) if aggregation["score"] != 0 else 0.5
+            # ===== NEW CODE (REPLACE WITH THIS) =====
+            logger.warning("🔍 Step 3: Advanced evidence aggregation...")
+            if evaluations:
+                try:
+                    # Use new advanced verdict agent
+                    advanced_agent = AdvancedVerdictAgent()
+                    verdict_result = advanced_agent.aggregate_with_advanced_scoring(
+                        main_claim, 
+                        evaluations
+                    )
+                    
+                    # Convert to compatible format for rest of pipeline
+                    aggregation = {
+                        "verdict": verdict_result.verdict,
+                        "score": self._convert_verdict_to_score(verdict_result.verdict),
+                        "confidence": verdict_result.confidence,
+                        "raw_score": 0,
+                        "total_weight": len(evaluations),
+                        "breakdown": {
+                            "SUPPORTS": sum(1 for e in evaluations if e.get("label") == "SUPPORTS"),
+                            "REFUTES": sum(1 for e in evaluations if e.get("label") == "REFUTES"),
+                            "NOT_ENOUGH_INFO": sum(1 for e in evaluations if e.get("label") == "NOT_ENOUGH_INFO")
+                        },
+                        "advanced_analysis": verdict_result
+                    }
+                    
+                    logger.warning("✅ Advanced verdict: %s (confidence: %.1f%%)", 
+                                verdict_result.verdict, verdict_result.confidence * 100)
+                    
+                except Exception as e:
+                    logger.warning("⚠️  Advanced verdict failed, using fallback: %s", str(e)[:50])
+                    # Fallback to old system if new one fails
+                    aggregation = aggregate_evaluations(evaluations)
             else:
-                verdict = "UNVERIFIED"
-                confidence = 0.0
+                aggregation = {
+                    "verdict": "Unverified / No Evidence Found",
+                    "score": 0.0,
+                    "raw_score": 0,
+                    "total_weight": 0,
+                    "confidence": 0.0,
+                    "breakdown": {"SUPPORTS": 0, "REFUTES": 0, "NOT_ENOUGH_INFO": 0}
+                }
             
-            logger.warning("✅ Aggregation complete - Verdict: %s", verdict)
+            # Rest of the method continues as before...
+            logger.warning("🔍 Step 4: Generating detailed report...")
+            report_generator = DetailedReportGenerator()
+            claim_report = report_generator.generate_claim_report(
+                claim=main_claim,
+                evaluations=evaluations,
+                aggregation_result=aggregation
+            )
             
-            # STEP 4: Generate report
-            report = self._generate_report(claims, verdict, confidence, all_evaluations)
+            comprehensive_report = report_generator.generate_comprehensive_report_single_claim(
+                main_claim=main_claim,
+                claim_report=claim_report
+            )
+            
+            logger.warning("✅ Pipeline complete")
             
             return {
-                "claims": claims,
-                "verdict": verdict,
-                "confidence": confidence,
-                "evaluations": all_evaluations,
-                "report": report
+                "claims": [main_claim],
+                "detailed_reports": [claim_report],
+                "comprehensive_report": comprehensive_report,
+                "overall_verdict": aggregation["verdict"],
+                "total_claims": 1,
+                "total_evidence_items": len(evaluations)
             }
             
         except Exception as e:
             logger.exception("❌ Pipeline error: %s", e)
             return {
                 "claims": [],
-                "verdict": "ERROR",
-                "confidence": 0.0,
-                "evaluations": [],
-                "report": f"Error during fact-checking: {str(e)[:100]}"
+                "detailed_reports": [],
+                "comprehensive_report": f"Error during fact-checking: {str(e)[:100]}",
+                "overall_verdict": "ERROR",
+                "total_claims": 0,
+                "total_evidence_items": 0
             }
     
+    def _convert_verdict_to_score(self, verdict: str) -> float:
+        """
+        Convert verdict string to numerical score (-1.0 to 1.0).
+        
+        Used for backward compatibility with old scoring system.
+        Maps new nuanced verdicts to numerical scale.
+        """
+        if not verdict:
+            return 0.0
+        
+        verdict_lower = verdict.lower()
+        
+        if verdict_lower == "true":
+            return 0.95
+        elif verdict_lower == "mostly true":
+            return 0.65
+        elif verdict_lower == "inconclusive":
+            return 0.0
+        elif verdict_lower == "mostly false":
+            return -0.65
+        elif verdict_lower == "false":
+            return -0.95
+        else:
+            return 0.0
+
+    def _calculate_overall_verdict(self, detailed_reports: list) -> str:
+        """Calculate overall verdict based on all claim verdicts."""
+        if not detailed_reports:
+            return "UNVERIFIED"
+        
+        verdicts = [r["result"]["category"] for r in detailed_reports]
+        
+        true_count = sum(1 for v in verdicts if "true" in v.lower() and "false" not in v.lower())
+        false_count = sum(1 for v in verdicts if "false" in v.lower())
+        mixed_count = len(verdicts) - true_count - false_count
+        
+        if false_count > len(verdicts) * 0.5:
+            return "MOSTLY FALSE"
+        elif true_count > len(verdicts) * 0.5:
+            return "MOSTLY TRUE"
+        elif mixed_count > len(verdicts) * 0.5:
+            return "MIXED EVIDENCE"
+        else:
+            return "INCONCLUSIVE"
+
+    def _generate_report(self, claims: list, verdict: str, confidence: float, evaluations: list) -> str:
+        """Legacy report generation (kept for compatibility)."""
+        logger.warning("⚠️  Using legacy report generation (deprecated)")
+        
+        report = "### Fact-Check Report\n\n"
+        
+        if not claims:
+            return report + "No claims to verify."
+        
+        report += f"**Overall Verdict:** **{verdict}** ({confidence:.1%} confidence)\n\n"
+        
+        return report
+
     def run_fact_check_pipeline_with_image(self, image_path: str) -> dict:
         """Execute fact-checking pipeline starting from image."""
         try:
