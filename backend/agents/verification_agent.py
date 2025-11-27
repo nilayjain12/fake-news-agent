@@ -1,5 +1,5 @@
-# backend/agents/verification_agent.py (FIXED)
-"""Evidence retrieval with FIXED web result handling."""
+# backend/agents/verification_agent.py (UPDATED)
+"""Evidence retrieval with increased evidence collection: Google 10 + FAISS 5 = top 10 selected."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tools.faiss_tool import faiss_search
 from tools.google_search_tool import google_search_tool
@@ -14,43 +14,60 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 class VerificationAgent:
-    """Runs evidence retrieval with proper web result handling."""
+    """Runs evidence retrieval with INCREASED evidence collection.
     
-    def __init__(self, top_k: int = 5):
-        self.top_k = top_k
+    Configuration:
+    - Google Search: 10 evidences
+    - FAISS: 5 evidences
+    - Total combined: 15 evidences
+    - Final selection: Top 10 ranked
+    """
+    
+    def __init__(self, google_top_k: int = 10, faiss_top_k: int = 5, final_top_k: int = 10):
+        """
+        Initialize with configurable evidence retrieval.
+        
+        Args:
+            google_top_k: Number of results from Google Search (default: 10)
+            faiss_top_k: Number of results from FAISS (default: 5)
+            final_top_k: Number of final ranked evidences to use (default: 10)
+        """
+        self.google_top_k = google_top_k
+        self.faiss_top_k = faiss_top_k
+        self.final_top_k = final_top_k
         self.model = ADK_MODEL_NAME
         self.ranker = SemanticRanker()
-        logger.warning("🔍 VerificationAgent initialized (top_k=%d) with advanced semantic ranking", top_k)
+        logger.warning("🔍 VerificationAgent initialized")
+        logger.warning("   Google Search: %d evidences", google_top_k)
+        logger.warning("   FAISS: %d evidences", faiss_top_k)
+        logger.warning("   Final Selection: top %d from combined", final_top_k)
 
     def _run_web_search(self, claim):
-        """Run Google Search with proper result handling."""
+        """Run Google Search with increased evidence collection (10 results)."""
         try:
             logger.warning("🔍 Google Search (ADK Agent): %s", claim[:60])
-            result = google_search_tool(query=claim, top_k=5)
+            # Increased from 5 to 10
+            result = google_search_tool(query=claim, top_k=self.google_top_k)
             
-            # FIXED: Ensure result is always a list
             if result is None:
                 logger.warning("   ⚠️  Google search returned None")
                 return []
             
             if not isinstance(result, list):
                 logger.warning("   ⚠️  Google search returned non-list type: %s", type(result).__name__)
-                # Try to convert to list
                 if isinstance(result, dict):
                     result = [result]
                 else:
                     return []
             
-            logger.warning("   ✅ Found %d web search results", len(result))
+            logger.warning("   ✅ Found %d web search results (target: %d)", len(result), self.google_top_k)
             
-            # Validate each result
             validated_results = []
             for i, res in enumerate(result, 1):
                 if not isinstance(res, dict):
                     logger.warning("   ⚠️  [%d] Result is not dict (type: %s), skipping", i, type(res).__name__)
                     continue
                 
-                # Check required fields
                 title = res.get('title', 'N/A')
                 relevance_score = res.get('relevance_score', 0)
                 content = res.get('content', '')
@@ -63,7 +80,6 @@ class VerificationAgent:
                 logger.warning("   [%d] Title: %s | Relevance: %.2f | URL: %s", 
                              i, title[:50], relevance_score, url[:40] if url else "N/A")
                 
-                # Ensure _source tag
                 if '_source' not in res:
                     res['_source'] = 'web'
                 
@@ -79,10 +95,10 @@ class VerificationAgent:
             return []
 
     def _run_faiss(self, claim):
-        """Run FAISS search for the claim."""
+        """Run FAISS search with standard 5 evidences."""
         try:
-            logger.warning("🔎 FAISS search: %s", claim[:60])
-            result = faiss_search(claim, k=self.top_k)
+            logger.warning("🔎 FAISS search (k=%d): %s", self.faiss_top_k, claim[:60])
+            result = faiss_search(claim, k=self.faiss_top_k)
             
             if not isinstance(result, list):
                 logger.warning("   ⚠️  FAISS returned non-list type: %s", type(result).__name__)
@@ -95,8 +111,8 @@ class VerificationAgent:
             return []
 
     def retrieve_all(self, claim):
-        """Run retrievals in parallel."""
-        logger.warning("🌐 Retrieving evidence from FAISS + Google...")
+        """Run retrievals in parallel (Google 10 + FAISS 5)."""
+        logger.warning("🌐 Retrieving evidence (Google 10 + FAISS 5 = 15 total)...")
         results = {"faiss": [], "web": []}
         
         with ThreadPoolExecutor(max_workers=2) as ex:
@@ -118,32 +134,37 @@ class VerificationAgent:
 
     def retrieve_and_rank_improved(self, claim):
         """
-        Retrieve from both sources and rank by semantic relevance with source boost.
+        Retrieve from both sources and rank top 10 by semantic relevance.
+        
+        Process:
+        1. Retrieve 10 from Google + 5 from FAISS = 15 total
+        2. Rank all 15 by semantic similarity + source boost
+        3. Select top 10
         
         Returns: (ranked_evidence, metadata)
         """
         logger.warning("📊 Starting ADVANCED retrieve-and-rank process...")
         
-        # Step 1: Retrieve from both sources
+        # STEP 1: Retrieve from both sources (Google 10 + FAISS 5)
         retrieved = self.retrieve_all(claim)
         
-        # Step 2: Combine and normalize results
+        # STEP 2: Combine and normalize results
         all_results = []
         
-        # Add FAISS results
+        # Add FAISS results (5)
         for item in retrieved['faiss']:
             if isinstance(item, dict):
                 item['_source'] = 'faiss'
-                item['_freshness_boost'] = 0.0  # FAISS = old, no boost
+                item['_freshness_boost'] = 0.0
             else:
                 item = {"content": str(item), "_source": "faiss", "_freshness_boost": 0.0}
             all_results.append(item)
         
-        # Add Google results (with freshness boost)
+        # Add Google results (10) with freshness boost
         for item in retrieved['web']:
             if isinstance(item, dict):
                 item['_source'] = 'web'
-                item['_freshness_boost'] = 0.25  # Web = fresh, +25% boost
+                item['_freshness_boost'] = 0.25
             else:
                 item = {"content": str(item), "_source": "web", "_freshness_boost": 0.25}
             all_results.append(item)
@@ -157,11 +178,11 @@ class VerificationAgent:
                        "retrieval_sources": {"faiss": 0, "google": 0}, 
                        "source_breakdown": {"faiss_selected": 0, "web_selected": 0}}
         
-        # Step 3: Compute semantic similarity and rank
+        # STEP 3: Rank all 15 and select top 10
         ranked_evidence, similarities, source_breakdown = self._rank_with_semantic_scoring(
             query=claim,
             evidence_items=all_results,
-            top_k=self.top_k
+            top_k=self.final_top_k  # Select top 10 from 15
         )
         
         # Metadata
@@ -184,19 +205,21 @@ class VerificationAgent:
         return ranked_evidence, metadata
 
     def _rank_with_semantic_scoring(self, query: str, evidence_items: list, 
-                                    top_k: int = 5) -> tuple:
+                                    top_k: int = 10) -> tuple:
         """
         Rank evidence using semantic similarity + source freshness boost.
+        
+        Updated to handle 15 evidences → select top 10
         
         Returns: (ranked_items, similarities, source_breakdown)
         """
         if not evidence_items:
             return [], [], {"faiss_selected": 0, "web_selected": 0}
         
-        logger.warning("🔄 Computing semantic scores for %d items...", len(evidence_items))
+        logger.warning("🔄 Computing semantic scores for %d items (selecting top %d)...", 
+                      len(evidence_items), top_k)
         
         try:
-            # Get query embedding
             query_embedding = self.ranker.embeddings.embed_query(query)
             import numpy as np
             query_vector = np.array(query_embedding)
@@ -205,19 +228,16 @@ class VerificationAgent:
             
             for i, item in enumerate(evidence_items):
                 try:
-                    # Extract content
                     content = item.get('content', str(item))
                     if isinstance(content, str):
                         content = content[:500]
                     else:
                         content = str(content)[:500]
                     
-                    # Compute semantic similarity
                     content_embedding = self.ranker.embeddings.embed_query(content)
                     content_vector = np.array(content_embedding)
                     semantic_sim = self._cosine_similarity(query_vector, content_vector)
                     
-                    # Apply freshness boost for web sources
                     freshness_boost = item.get('_freshness_boost', 0.0)
                     final_score = semantic_sim + freshness_boost
                     
@@ -241,10 +261,11 @@ class VerificationAgent:
             
             # Sort by final score (descending)
             scored_items.sort(key=lambda x: x['final_score'], reverse=True)
-            logger.warning("✅ All items ranked by score")
+            logger.warning("✅ All %d items ranked by score", len(scored_items))
             
-            # Select top K
+            # Select top K (10 from 15)
             top_items = scored_items[:top_k]
+            logger.warning("📊 Selected top %d items from %d", len(top_items), len(scored_items))
             
             # Track source breakdown
             source_breakdown = {
@@ -255,16 +276,18 @@ class VerificationAgent:
             similarities = [item['final_score'] for item in top_items]
             evidence = [item['item'] for item in top_items]
             
-            logger.warning("✅ Selected top %d items:", len(top_items))
+            logger.warning("✅ Final selection (top %d):", len(top_items))
             for i, (item, score) in enumerate(zip(top_items, similarities), 1):
                 logger.warning("   %d. %s (final_score: %.3f)", i, item['source'], score)
+            
+            logger.warning("   Source breakdown: FAISS=%d, Web=%d", 
+                          source_breakdown["faiss_selected"], source_breakdown["web_selected"])
             
             return evidence, similarities, source_breakdown
             
         except Exception as e:
             logger.exception("❌ Semantic scoring error: %s", e)
             logger.warning("⚠️  Fallback: returning first K items")
-            # Fallback: just return first top_k items sorted by source (web first)
             sorted_items = sorted(evidence_items, 
                                 key=lambda x: (0 if x.get('_source') == 'web' else 1))
             return sorted_items[:top_k], [0.0] * min(top_k, len(sorted_items)), \
@@ -283,16 +306,17 @@ class VerificationAgent:
         return float(np.dot(vec1, vec2) / (norm1 * norm2))
 
     def batch_evaluate_evidence(self, claim, evidence_items):
-        """Batch evaluate ranked evidence."""
+        """Batch evaluate ranked evidence (now 10 instead of 5)."""
         if not evidence_items:
             logger.warning("❌ No evidence items to evaluate")
             return []
         
+        # Use all top 10 (instead of limiting to 5)
         evidence_items = evidence_items[:10]
+        logger.warning("📊 Batch evaluating %d evidence items", len(evidence_items))
         
         try:
             prompt = self._build_evaluation_prompt(claim, evidence_items)
-            logger.warning("🔄 Batch evaluating %d evidence items", len(evidence_items))
             
             response = client.models.generate_content(
                 model=self.model,
@@ -329,18 +353,18 @@ class VerificationAgent:
             return self._fallback_evaluate(claim, evidence_items)
 
     def _build_evaluation_prompt(self, claim, evidence_items):
-        """Build evaluation prompt."""
+        """Build evaluation prompt for 10 evidence items."""
         evidence_text = "\n\n".join([
             f"[Evidence {i}]\nSource: {item.get('_source', 'unknown')}\n"
             f"Content: {item.get('content', str(item))[:300]}"
             for i, item in enumerate(evidence_items, 1)
         ])
         
-        prompt = f"""You are an expert fact-checker. Evaluate each evidence against the claim.
+        prompt = f"""You are an expert fact-checker. Evaluate each of the 10 evidence pieces against the claim.
 
 CLAIM: "{claim}"
 
-EVIDENCE ITEMS:
+EVIDENCE ITEMS (10 TOTAL):
 {evidence_text}
 
 RULES:
@@ -348,10 +372,17 @@ RULES:
 - REFUTES: Evidence shows claim is FALSE
 - NOT_ENOUGH_INFO: Vague or doesn't address claim
 
-Response format (labels only):
+Response format (labels only, one per line):
 Evidence 1: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
 Evidence 2: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
-..."""
+Evidence 3: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 4: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 5: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 6: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 7: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 8: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 9: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
+Evidence 10: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]"""
         return prompt
 
     def _fallback_evaluate(self, claim, evidence_items):
@@ -361,7 +392,7 @@ Evidence 2: [SUPPORTS/REFUTES/NOT_ENOUGH_INFO]
                 for item in evidence_items]
 
     def run(self, claim):
-        """Run complete verification."""
+        """Run complete verification with 10 evidences."""
         logger.warning("📊 Verifying claim: %s", claim[:60])
         
         ranked_evidence, metadata = self.retrieve_and_rank_improved(claim)

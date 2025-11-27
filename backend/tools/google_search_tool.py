@@ -17,13 +17,13 @@ logger = get_logger(__name__)
 os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
 
 
-def google_search_tool(query: str, top_k: int = 5) -> list:
+def google_search_tool(query: str, top_k: int = 10) -> list:
     """
     Execute Google search using ADK Agent and return JSON results directly.
     
     Args:
         query: Search query string
-        top_k: Number of results to return (default: 5)
+        top_k: Number of results to return (default: 10)
     
     Returns:
         List of search result dictionaries with keys: rank, title, content, url, relevance_score

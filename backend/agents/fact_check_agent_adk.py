@@ -4,7 +4,7 @@ from google.adk.agents import LlmAgent
 from agents.ingestion_agent import IngestionAgent
 from agents.claim_extraction_agent import ClaimExtractionAgent
 from agents.verification_agent import VerificationAgent
-from agents.aggregator_and_verdict import aggregate_evaluations
+from agents.aggregator_and_verdict import AdvancedVerdictAgent, aggregate_evaluations
 from config import ADK_MODEL_NAME, get_logger
 from memory.manager import MemoryManager
 import json
@@ -281,7 +281,6 @@ class FactCheckSequentialAgent:
                     "total_evidence_items": 0
                 }
             
-            # IMPORTANT: Take only the FIRST (and should be ONLY) claim
             main_claim = claims[0]
             logger.warning("✅ Main claim: %s", main_claim[:80])
             
@@ -292,10 +291,53 @@ class FactCheckSequentialAgent:
             
             logger.warning("✅ Found %d evidence items", len(evaluations))
             
-            # STEP 3: Aggregate Evidence
-            logger.warning("🔍 Step 3: Aggregating evidence...")
+            # ===== OLD CODE (DELETE THIS SECTION) =====
+            # logger.warning("🔍 Step 3: Aggregating evidence...")
+            # if evaluations:
+            #     aggregation = aggregate_evaluations(evaluations)
+            # else:
+            #     aggregation = {
+            #         "verdict": "Unverified / No Evidence Found",
+            #         "score": 0.0,
+            #         "raw_score": 0,
+            #         "total_weight": 0,
+            #         "confidence": 0.0,
+            #         "breakdown": {"SUPPORTS": 0, "REFUTES": 0, "NOT_ENOUGH_INFO": 0}
+            #     }
+            
+            # ===== NEW CODE (REPLACE WITH THIS) =====
+            logger.warning("🔍 Step 3: Advanced evidence aggregation...")
             if evaluations:
-                aggregation = aggregate_evaluations(evaluations)
+                try:
+                    # Use new advanced verdict agent
+                    advanced_agent = AdvancedVerdictAgent()
+                    verdict_result = advanced_agent.aggregate_with_advanced_scoring(
+                        main_claim, 
+                        evaluations
+                    )
+                    
+                    # Convert to compatible format for rest of pipeline
+                    aggregation = {
+                        "verdict": verdict_result.verdict,
+                        "score": self._convert_verdict_to_score(verdict_result.verdict),
+                        "confidence": verdict_result.confidence,
+                        "raw_score": 0,
+                        "total_weight": len(evaluations),
+                        "breakdown": {
+                            "SUPPORTS": sum(1 for e in evaluations if e.get("label") == "SUPPORTS"),
+                            "REFUTES": sum(1 for e in evaluations if e.get("label") == "REFUTES"),
+                            "NOT_ENOUGH_INFO": sum(1 for e in evaluations if e.get("label") == "NOT_ENOUGH_INFO")
+                        },
+                        "advanced_analysis": verdict_result
+                    }
+                    
+                    logger.warning("✅ Advanced verdict: %s (confidence: %.1f%%)", 
+                                verdict_result.verdict, verdict_result.confidence * 100)
+                    
+                except Exception as e:
+                    logger.warning("⚠️  Advanced verdict failed, using fallback: %s", str(e)[:50])
+                    # Fallback to old system if new one fails
+                    aggregation = aggregate_evaluations(evaluations)
             else:
                 aggregation = {
                     "verdict": "Unverified / No Evidence Found",
@@ -306,9 +348,7 @@ class FactCheckSequentialAgent:
                     "breakdown": {"SUPPORTS": 0, "REFUTES": 0, "NOT_ENOUGH_INFO": 0}
                 }
             
-            logger.warning("✅ Aggregation complete - Verdict: %s", aggregation["verdict"])
-            
-            # STEP 4: Generate Single Detailed Report
+            # Rest of the method continues as before...
             logger.warning("🔍 Step 4: Generating detailed report...")
             report_generator = DetailedReportGenerator()
             claim_report = report_generator.generate_claim_report(
@@ -317,7 +357,6 @@ class FactCheckSequentialAgent:
                 aggregation_result=aggregation
             )
             
-            # STEP 5: Generate Comprehensive Report (Single Claim Format)
             comprehensive_report = report_generator.generate_comprehensive_report_single_claim(
                 main_claim=main_claim,
                 claim_report=claim_report
@@ -345,6 +384,31 @@ class FactCheckSequentialAgent:
                 "total_evidence_items": 0
             }
     
+    def _convert_verdict_to_score(self, verdict: str) -> float:
+        """
+        Convert verdict string to numerical score (-1.0 to 1.0).
+        
+        Used for backward compatibility with old scoring system.
+        Maps new nuanced verdicts to numerical scale.
+        """
+        if not verdict:
+            return 0.0
+        
+        verdict_lower = verdict.lower()
+        
+        if verdict_lower == "true":
+            return 0.95
+        elif verdict_lower == "mostly true":
+            return 0.65
+        elif verdict_lower == "inconclusive":
+            return 0.0
+        elif verdict_lower == "mostly false":
+            return -0.65
+        elif verdict_lower == "false":
+            return -0.95
+        else:
+            return 0.0
+
     def _calculate_overall_verdict(self, detailed_reports: list) -> str:
         """Calculate overall verdict based on all claim verdicts."""
         if not detailed_reports:

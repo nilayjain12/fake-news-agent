@@ -164,27 +164,24 @@ class DetailedReportGenerator:
 
     def _format_verdict(self, verdict: str, confidence: float, score: float) -> Dict:
         """Format verdict with confidence percentage."""
-        # Normalize verdict text
         verdict_text = verdict.strip()
         
-        # Map to simple categories
-        if "true" in verdict_text.lower() and "false" not in verdict_text.lower():
-            if "mostly" in verdict_text.lower():
-                category = "Mostly True"
-                color = "orange"
-            else:
-                category = "True"
-                color = "green"
-        elif "false" in verdict_text.lower():
-            if "mostly" in verdict_text.lower():
-                category = "Mostly False"
-                color = "orange"
-            else:
-                category = "False"
-                color = "red"
-        elif "mixed" in verdict_text.lower() or "inconclusive" in verdict_text.lower():
-            category = "Mixed Evidence"
-            color = "blue"
+        # NEW: Support all 5 verdict levels
+        if verdict_text.lower() == "true":
+            category = "True"
+            color = "green"
+        elif verdict_text.lower() == "mostly true":
+            category = "Mostly True"
+            color = "lightgreen"
+        elif verdict_text.lower() == "inconclusive":
+            category = "Inconclusive"
+            color = "gray"
+        elif verdict_text.lower() == "mostly false":
+            category = "Mostly False"
+            color = "lightyellow"
+        elif verdict_text.lower() == "false":
+            category = "False"
+            color = "red"
         else:
             category = "Unverified"
             color = "gray"
