@@ -129,11 +129,11 @@ def get_verdict_color(verdict: str) -> str:
 
 
 def process_fact_check(user_input: str) -> tuple:
-    """Process fact-check request and return results"""
+    """Process fact-check request and return results with detailed reports."""
     agent_instance, memory_instance = initialize_agent()
     
     if not user_input.strip():
-        return "", [], [], "", 0.0
+        return "", [], "", 0.0
     
     # Preprocess input
     processed_input = agent_instance.preprocess_input(user_input)
@@ -159,56 +159,56 @@ def process_fact_check(user_input: str) -> tuple:
 
 **Status:** Retrieved from memory cache ({execution_time:.0f}ms - 700x faster!)
 
-**Query:** {user_input[:200]}
-
 **Cached Claim:** {cached_claim['claim_text']}
 
 **Verdict:** **{verdict}**
 
 **Confidence:** {confidence:.1%}
 
-*Note: For updated information, the verification can be re-run.*
+*Note: For updated information, re-run the verification.*
 """
         
     else:
         # No cache hit - run full pipeline
         thinking_steps.append(("📭 No Cache Hit", "Running full verification pipeline..."))
         
-        # Step 2: Extract claims
-        thinking_steps.append(("Step 2: Extracting Claims", "Identifying factual claims from the input..."))
-        
+        # Run the complete pipeline (now returns detailed reports)
+        logger.warning("Running fact-check pipeline...")
         result = agent_instance.run_fact_check_pipeline(processed_input)
         
+        # Extract results
         claims = result.get("claims", [])
-        thinking_steps.append((f"✅ Extracted {len(claims)} Claims", f"Found {len(claims)} verifiable claims"))
+        detailed_reports = result.get("detailed_reports", [])
+        comprehensive_report = result.get("comprehensive_report", "")
+        overall_verdict = result.get("overall_verdict", "UNKNOWN")
+        total_evidence = result.get("total_evidence_items", 0)
         
-        # Step 3: Verify claims
-        thinking_steps.append(("Step 3: Verifying Claims", "Searching FAISS knowledge base + Google Search..."))
+        thinking_steps.append((f"✅ Extracted {len(claims)} Claims", 
+                            f"Identified {len(claims)} verifiable claims from input"))
         
-        evaluations = result.get("evaluations", [])
-        thinking_steps.append((f"✅ Retrieved {len(evaluations)} Evidence Items", f"Found {len(evaluations)} supporting/refuting sources"))
+        thinking_steps.append((f"✅ Retrieved {total_evidence} Evidence Items", 
+                            f"Searched FAISS + Google for supporting/refuting sources"))
         
-        # Step 4: Aggregate results
-        thinking_steps.append(("Step 4: Aggregating Results", "Computing final verdict from all evidence..."))
+        thinking_steps.append((f"✅ Generated {len(detailed_reports)} Detailed Reports", 
+                            f"Created comprehensive analysis for each claim"))
         
-        verdict = result.get("verdict", "UNKNOWN")
-        confidence = result.get("confidence", 0.5)
+        # Use comprehensive report as final assessment
+        final_assessment = comprehensive_report
+        
+        verdict = overall_verdict
+        confidence = _calculate_average_confidence(detailed_reports) if detailed_reports else 0.5
         
         execution_time = (time.time() - start_time) * 1000
-        
         thinking_steps.append(("✅ Verification Complete!", f"Total time: {execution_time:.0f}ms"))
         
-        report = result.get("report", "No report generated")
-        final_assessment = report
-        
-        # Cache the result
+        # Cache the overall result
         if verdict and verdict != "ERROR":
             try:
                 agent_instance.cache_result(
                     claim=user_input[:500],
                     verdict=verdict,
                     confidence=confidence,
-                    evidence_count=len(evaluations),
+                    evidence_count=total_evidence,
                     session_id=session_id
                 )
                 thinking_steps.append(("💾 Result Cached", "Stored for faster future lookups"))
@@ -226,8 +226,32 @@ def process_fact_check(user_input: str) -> tuple:
     except Exception as e:
         logger.warning(f"Failed to log interaction: {str(e)}")
     
-    return user_input, thinking_steps, [], final_assessment, confidence
+    return user_input, thinking_steps, final_assessment, confidence
 
+def _calculate_average_confidence(detailed_reports: list) -> float:
+    """Calculate average confidence from detailed reports."""
+    if not detailed_reports:
+        return 0.5
+    
+    total_confidence = sum(r["result"]["confidence_percentage"] for r in detailed_reports) / 100
+    return total_confidence / len(detailed_reports)
+
+def format_response(user_query: str, thinking_steps: list, final_assessment: str, confidence: float) -> str:
+    """Format response with single claim report."""
+    
+    thinking_content = format_thinking_process(thinking_steps)
+    
+    # No need to change this - final_assessment is already markdown
+    response = f"""<details style="margin: 15px 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #FFB300;">
+<summary style="cursor: pointer; font-weight: bold; color: #000000;">🧠 Agent Thinking Process</summary>
+
+{thinking_content}
+
+</details>
+
+{final_assessment}
+"""
+    return response
 
 def process_image_verification(image_path):
     """Process image-based verification."""
@@ -311,27 +335,8 @@ def format_thinking_process(thinking_steps: list) -> str:
     return formatted
 
 
-def format_response(user_query: str, thinking_steps: list, final_assessment: str, confidence: float) -> str:
-    """Format the complete response with collapsible thinking section"""
-    
-    thinking_content = format_thinking_process(thinking_steps)
-    
-    # Create HTML with collapsible details element
-    response = f"""<details style="margin: 15px 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
-<summary style="cursor: pointer; font-weight: bold; color: #667eea;">🧠 Agent Thinking Process</summary>
-
-{thinking_content}
-
-</details>
-
-{final_assessment}
-"""
-    
-    return response
-
-
 def chat_interface(message: str, history: list) -> tuple:
-    """Main chat interface function"""
+    """Main chat interface function with detailed reports."""
     if not message.strip():
         return history, ""
     
@@ -340,7 +345,7 @@ def chat_interface(message: str, history: list) -> tuple:
     
     try:
         # Process the fact check
-        user_query, thinking_steps, _, final_assessment, confidence = process_fact_check(message)
+        user_query, thinking_steps, final_assessment, confidence = process_fact_check(message)
         
         # Format the complete response with thinking steps in collapsible section
         formatted_response = format_response(user_query, thinking_steps, final_assessment, confidence)
@@ -357,7 +362,7 @@ def chat_interface(message: str, history: list) -> tuple:
 
 # Create Gradio interface
 def create_interface():
-    """Create and return the Gradio interface"""
+    """Create and return the Gradio interface (UPDATED)"""
     
     initialize_agent()
     
@@ -404,6 +409,20 @@ def create_interface():
             border-radius: 10px;
             margin: 10px 0;
         }
+        .report-section {
+            background-color: #f0f7ff;
+            padding: 15px;
+            border-left: 4px solid #2196F3;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .source-box {
+            background-color: #e8f5e9;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            border-left: 3px solid #4caf50;
+        }
         details {
             margin: 15px 0;
             padding: 15px;
@@ -427,9 +446,6 @@ def create_interface():
             background-color: #e8f0ff;
             border-radius: 4px;
         }
-        details p, details strong, details em, details code {
-            color: #333333;
-        }
         """
     ) as demo:
         
@@ -437,26 +453,24 @@ def create_interface():
         gr.Markdown("""
         # 🔍 Fake News Detection Agent
         
-        AI-powered fact-checking with real-time verification
+        AI-powered fact-checking with **detailed analysis and source verification**
         
-        This agent verifies news articles and claims using:
-        - 🔍 FAISS knowledge base
-        - 🌐 Real-time Google Search
-        - 💾 Smart memory cache
-        - 🤖 Multi-agent pipeline
-        - 📸 Image-based verification (NEW!)
+        This agent now provides:
+        - 📊 **Detailed Verdicts** - True / False / Mostly True / Mostly False with confidence scores
+        - 📝 **Explanations** - Why the information is true or false based on sources
+        - 🔗 **Source Attribution** - Links and snippets from verified sources
+        - 📈 **Scoring Breakdown** - How the agent calculated the verdict (SUPPORTS vs REFUTES)
         """)
         
         with gr.Tab("💬 Text Verification"):
             with gr.Row():
                 with gr.Column(scale=3):
-                    # Main chat interface
-                    gr.Markdown("### 💬 Verify News")
+                    gr.Markdown("### 💬 Verify News Claims")
                     
                     with gr.Group():
                         chatbot = gr.Chatbot(
                             label="Chat History",
-                            height=400,
+                            height=500,
                             show_label=True,
                             render_markdown=True
                         )
@@ -478,98 +492,53 @@ def create_interface():
                             clear_btn = gr.Button("🗑️ Clear History", scale=1)
                             example_btn = gr.Button("📝 Try Example", scale=1)
                     
-                    # Submit event
                     submit_btn.click(
                         chat_interface,
                         inputs=[msg, chatbot],
                         outputs=[chatbot, msg]
                     )
                     
-                    # Clear history
-                    clear_btn.click(
-                        clear_history,
-                        outputs=chatbot
-                    )
+                    clear_btn.click(clear_history, outputs=chatbot)
                     
-                    # Load example
                     def load_example():
-                        example = random.choice([
+                        return random.choice([
                             "The Earth revolves around the Sun once every 365 days.",
-                            "Honey never spoils and can remain edible for thousands of years.",
-                            "Scientists have discovered a vaccine that permanently eliminates the common cold.",
-                            "Drinking eight glasses of water per day prevents all diseases.",
-                            "Lightning can strike the same place more than once.",
-                            "Humans can survive for weeks without sleep with no negative health effects."
+                            "Water boils at 100 degrees Celsius at sea level.",
+                            "The Great Wall of China is visible from space with the naked eye.",
+                            "Vitamin C prevents the common cold in all cases.",
+                            "Goldfish have a memory span of only 3 seconds."
                         ])
-                        return example
                     
-                    example_btn.click(
-                        load_example,
-                        outputs=msg
-                    )
+                    example_btn.click(load_example, outputs=msg)
+                    
+                    msg.submit(chat_interface, inputs=[msg, chatbot], outputs=[chatbot, msg])
                 
                 with gr.Column(scale=1):
-                    # Sidebar with statistics
                     gr.Markdown("### 📊 Statistics")
-                    
                     stats_output = gr.Markdown(label="System Stats")
-                    
-                    # Add a button to refresh stats
                     refresh_btn = gr.Button("🔄 Refresh Stats")
-                    refresh_btn.click(
-                        get_stats,
-                        outputs=stats_output
-                    )
+                    refresh_btn.click(get_stats, outputs=stats_output)
+                    demo.load(get_stats, outputs=stats_output)
                     
-                    # Load stats on startup
-                    demo.load(
-                        get_stats,
-                        outputs=stats_output
-                    )
-                    
-                    # Add info section
                     gr.Markdown("""
-                    ### ℹ️ How It Works
+                    ### 📋 New Report Features
                     
-                    1. **Extract Claims** - Identifies verifiable statements
-                    2. **Search Evidence** - Queries FAISS + Google
-                    3. **Evaluate Sources** - Analyzes supporting/refuting evidence
-                    4. **Generate Verdict** - Aggregates results
-                    5. **Cache Results** - Stores for instant future lookups
+                    **Result:** Verdict with confidence %
                     
-                    ### ⚡ Performance
+                    **Explanation:** Why true/false
                     
-                    - **Cache Hit:** ~50-200ms
-                    - **Fresh Verification:** ~3-10 seconds
-                    - **Average:** ~2-5 seconds
+                    **Sources:** Links & snippets
+                    
+                    **Scoring:** SUPPORTS vs REFUTES breakdown
                     """)
-            
-            # Keyboard shortcut
-            msg.submit(
-                chat_interface,
-                inputs=[msg, chatbot],
-                outputs=[chatbot, msg]
-            )
         
-        # NEW: Image Verification Tab
         with gr.Tab("📸 Image Verification"):
-            gr.Markdown("### Verify Claims from Images")
+            gr.Markdown("### 📸 Verify Claims from Images")
             
             with gr.Group():
-                image_input = gr.Image(
-                    label="Upload Image",
-                    type="filepath",
-                    scale=1
-                )
-                
-                image_verify_btn = gr.Button(
-                    "🔍 Verify Image",
-                    size="lg"
-                )
-                
-                image_output = gr.Markdown(
-                    label="Verification Result"
-                )
+                image_input = gr.Image(label="Upload Image", type="filepath", scale=1)
+                image_verify_btn = gr.Button("🔍 Verify Image", size="lg")
+                image_output = gr.Markdown(label="Verification Result")
             
             image_verify_btn.click(
                 process_image_verification,
@@ -577,30 +546,39 @@ def create_interface():
                 outputs=image_output
             )
         
-        # About Tab
         with gr.Tab("ℹ️ About"):
             gr.Markdown("""
-            ## About Fake News Detection Agent
+            ## About Fact-Checking Reports
             
-            This is an AI-powered fact-checking system built with:
+            Each claim is now analyzed with **four key components**:
             
-            - **Google ADK** - Multi-agent orchestration framework
-            - **Gemini 2.5 Flash** - LLM for reasoning and evaluation
-            - **FAISS** - Vector database for semantic search
-            - **SQLite** - Persistent memory management
+            ### 1️⃣ Result
+            - **Verdict:** True / False / Mostly True / Mostly False
+            - **Confidence:** Percentage confidence in the verdict
+            - **Level:** Very High / High / Moderate / Low / Very Low
             
-            ### Features
+            ### 2️⃣ Explanation
+            - Why the verdict was reached
+            - Number of supporting/refuting sources
+            - Evidence balance analysis
             
-            ✅ Multi-agent pipeline with specialized components
-            ✅ Dual-source verification (FAISS + Google Search)
-            ✅ Smart memory caching for 700x faster repeat queries
-            ✅ Image-based claim extraction and verification
-            ✅ Real-time web search integration
-            ✅ Confidence scoring and verdict distribution
+            ### 3️⃣ Sources
+            - Direct links to verification sources
+            - Source snippets showing evidence
+            - Whether each source supports or refutes
             
-            ### Capstone Project
+            ### 4️⃣ Scoring Breakdown
+            - SUPPORTS count (evidence agreeing with claim)
+            - REFUTES count (evidence contradicting claim)
+            - NOT_ENOUGH_INFO count (insufficient evidence)
+            - Raw and normalized scores
+            - Critical factors that influenced verdict
             
-            Part of the 5-Day AI Agents Intensive with Google (Nov 2025)
+            ### Technology Stack
+            - **Google ADK** - Multi-agent orchestration
+            - **Gemini 2.5 Flash** - LLM-based claim extraction & evaluation
+            - **FAISS** - Semantic search on knowledge base
+            - **Google Search** - Real-time web verification
             """)
     
     return demo

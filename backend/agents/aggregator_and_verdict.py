@@ -1,212 +1,248 @@
-# backend/agents/aggregator_and_verdict.py
-"""Aggregator to combine evidence evaluations into a final verdict."""
-from collections import Counter
-from config import get_logger
+# backend/agents/aggregator_and_verdict.py - UPDATED
+"""
+UPDATED: Simple 3-level verdict system with binary evidence classification
+Verdicts: TRUE, FALSE, INCONCLUSIVE
+Evidence: SUPPORTS or REFUTES (binary only)
+"""
+from google import genai
+from config import GEMINI_API_KEY, ADK_MODEL_NAME, get_logger
+import json
+import os
+from typing import List, Dict
+from dataclasses import dataclass
 
 logger = get_logger(__name__)
+os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-def aggregate_evaluations(evaluations):
-    """Aggregate evaluations with intelligent, robust scoring - IMPROVED to handle refutations."""
-    logger.warning("📈 Aggregating %d evaluations", len(evaluations))
+
+@dataclass
+class VerdictResult:
+    """Simple verdict result with 3-level classification"""
+    verdict: str  # TRUE, FALSE, INCONCLUSIVE
+    confidence: float  # 0.0-1.0
+    reasoning: str  # Explanation
+    supports_count: int  # Number of supporting evidence
+    refutes_count: int  # Number of refuting evidence
+    total_evidence: int  # Total evidence evaluated
+
+
+class AdvancedVerdictAgent:
+    """
+    UPDATED: Simple 3-level verdict system
+    - TRUE: More SUPPORTS than REFUTES
+    - FALSE: More REFUTES than SUPPORTS
+    - INCONCLUSIVE: Equal SUPPORTS and REFUTES
     
-    if not evaluations:
-        logger.warning("⚠️  No evaluations to aggregate")
+    Confidence based on evidence majority strength
+    """
+    
+    def __init__(self):
+        self.model = ADK_MODEL_NAME
+        logger.warning("🚀 AdvancedVerdictAgent initialized (3-LEVEL SYSTEM)")
+
+    def aggregate_with_advanced_scoring(self, claim: str, evaluations: List[Dict]) -> VerdictResult:
+        """
+        Main entry point: Aggregate binary evaluations into 3-level verdict
+        
+        Args:
+            claim: The original claim being verified
+            evaluations: List of evaluations with SUPPORTS/REFUTES labels only
+            
+        Returns:
+            VerdictResult with 3-level verdict
+        """
+        logger.warning("📊 Starting evidence aggregation for: %s", claim[:60])
+        
+        if not evaluations:
+            logger.warning("⚠️  No evaluations provided")
+            return VerdictResult(
+                verdict="INCONCLUSIVE",
+                confidence=0.0,
+                reasoning="No evidence available for analysis",
+                supports_count=0,
+                refutes_count=0,
+                total_evidence=0
+            )
+        
+        logger.warning("📝 Processing %d evaluations (BINARY: SUPPORTS/REFUTES)", len(evaluations))
+        
+        # STEP 1: Count evidence
+        verdict_result = self._count_and_classify(evaluations)
+        
+        logger.warning("✅ Verdict: %s (confidence: %.1f%%)", 
+                      verdict_result.verdict, verdict_result.confidence * 100)
+        
+        return verdict_result
+
+    def _count_and_classify(self, evaluations: List[Dict]) -> VerdictResult:
+        """
+        Count SUPPORTS vs REFUTES and generate 3-level verdict
+        
+        Logic:
+        - More SUPPORTS → TRUE
+        - More REFUTES → FALSE
+        - Equal → INCONCLUSIVE
+        
+        Confidence based on how strong the majority is
+        """
+        supports = 0
+        refutes = 0
+        
+        for eval_item in evaluations:
+            label = eval_item.get("label", "").upper()
+            
+            if label == "SUPPORTS":
+                supports += 1
+            elif label == "REFUTES":
+                refutes += 1
+            # Note: NO NOT_ENOUGH_INFO - binary classification only
+        
+        total = supports + refutes
+        
+        logger.warning("📊 Evidence count - SUPPORTS: %d, REFUTES: %d, TOTAL: %d", 
+                      supports, refutes, total)
+        
+        # Calculate verdict and confidence
+        if supports > refutes:
+            verdict = "TRUE"
+            confidence = self._calculate_confidence(supports, refutes, total)
+            reasoning = self._generate_reasoning_true(supports, refutes, total)
+            
+        elif refutes > supports:
+            verdict = "FALSE"
+            confidence = self._calculate_confidence(refutes, supports, total)
+            reasoning = self._generate_reasoning_false(supports, refutes, total)
+            
+        else:
+            # Equal counts
+            verdict = "INCONCLUSIVE"
+            confidence = 0.5
+            reasoning = self._generate_reasoning_inconclusive(supports, refutes, total)
+        
+        logger.warning("   Verdict: %s, Confidence: %.2f", verdict, confidence)
+        
+        return VerdictResult(
+            verdict=verdict,
+            confidence=confidence,
+            reasoning=reasoning,
+            supports_count=supports,
+            refutes_count=refutes,
+            total_evidence=total
+        )
+
+    def _calculate_confidence(self, majority: int, minority: int, total: int) -> float:
+        """
+        Calculate confidence based on majority strength
+        
+        Confidence scale:
+        - 90%+: Very high confidence (e.g., 9 supports vs 1 refute)
+        - 70-90%: High confidence (e.g., 7 supports vs 3 refute)
+        - 50-70%: Moderate confidence (e.g., 6 supports vs 4 refute)
+        - 50%: No confidence (equal votes)
+        
+        Formula: (majority_pct - 50%) / 50% * scaling_factor + base
+        """
+        if total == 0:
+            return 0.0
+        
+        majority_pct = majority / total
+        
+        # Simple formula: how much does majority exceed 50%?
+        # 51% → 0.52 confidence
+        # 70% → 0.75 confidence
+        # 90% → 0.95 confidence
+        
+        if majority_pct >= 0.9:
+            confidence = 0.95
+        elif majority_pct >= 0.8:
+            confidence = 0.88
+        elif majority_pct >= 0.7:
+            confidence = 0.78
+        elif majority_pct >= 0.6:
+            confidence = 0.68
+        elif majority_pct > 0.5:
+            confidence = min(0.55 + (majority_pct - 0.5) * 0.2, 0.65)
+        else:
+            confidence = 0.5
+        
+        logger.warning("      Confidence calculation: %d/%d = %.1f%% → confidence: %.2f",
+                      majority, total, majority_pct * 100, confidence)
+        
+        return confidence
+
+    def _generate_reasoning_true(self, supports: int, refutes: int, total: int) -> str:
+        """Generate reasoning for TRUE verdict"""
+        pct = (supports / total * 100) if total > 0 else 0
+        
+        if supports == total:
+            return f"All {total} evidence sources support this claim with no contradictions."
+        elif refutes == 0:
+            return f"All {supports} evidence sources support this claim. No refuting evidence found."
+        else:
+            return f"{supports} sources support this claim vs {refutes} that refute it ({pct:.0f}% agreement)."
+
+    def _generate_reasoning_false(self, supports: int, refutes: int, total: int) -> str:
+        """Generate reasoning for FALSE verdict"""
+        pct = (refutes / total * 100) if total > 0 else 0
+        
+        if refutes == total:
+            return f"All {total} evidence sources refute this claim with no support."
+        elif supports == 0:
+            return f"All {refutes} evidence sources refute this claim. No supporting evidence found."
+        else:
+            return f"{refutes} sources refute this claim vs {supports} that support it ({pct:.0f}% refutation)."
+
+    def _generate_reasoning_inconclusive(self, supports: int, refutes: int, total: int) -> str:
+        """Generate reasoning for INCONCLUSIVE verdict"""
+        if total == 0:
+            return "No evidence available to determine verdict."
+        else:
+            return f"Evidence is evenly split: {supports} sources support and {supports} sources refute the claim. Requires additional investigation."
+
+    def convert_to_old_format(self, verdict_result: VerdictResult) -> Dict:
+        """
+        Convert to old report format for backward compatibility with report generator
+        """
+        # Map 3-level verdicts to legacy format
+        verdict_text = verdict_result.verdict
+        
+        # Convert to report-friendly format
         return {
-            "verdict": "Unverified / No Evidence Found",
-            "score": 0.0,
+            "verdict": verdict_text,
+            "score": self._verdict_to_score(verdict_text),
+            "confidence": verdict_result.confidence,
             "raw_score": 0,
-            "total_weight": 0,
-            "breakdown": {"SUPPORTS": 0, "REFUTES": 0, "NOT_ENOUGH_INFO": 0}
-        }
-    
-    # Separate evaluations by type
-    supports_evals = []
-    refutes_evals = []
-    neutral_evals = []
-    
-    for ev in evaluations:
-        label = ev.get("label", "NOT_ENOUGH_INFO")
-        evidence = ev.get("evidence", {})
-        src = evidence.get("_source", "web") if isinstance(evidence, dict) else "web"
-        
-        # Weight map: web search (current info) > FAISS (knowledge base)
-        weight = 1.5 if src in ["web", "google_search", "google_search_fallback"] else 1.0
-        
-        if label == "SUPPORTS":
-            supports_evals.append((weight, src))
-        elif label == "REFUTES":
-            refutes_evals.append((weight, src))
-        else:  # NOT_ENOUGH_INFO
-            neutral_evals.append((weight, src))
-    
-    logger.warning("📊 Detailed evaluation breakdown:")
-    logger.warning("   SUPPORTS: %d items", len(supports_evals))
-    for i, (w, src) in enumerate(supports_evals, 1):
-        logger.warning("      %d. weight=%.1f src=%s", i, w, src)
-    
-    logger.warning("   REFUTES: %d items", len(refutes_evals))
-    for i, (w, src) in enumerate(refutes_evals, 1):
-        logger.warning("      %d. weight=%.1f src=%s", i, w, src)
-    
-    logger.warning("   NOT_ENOUGH_INFO: %d items (neutral, not scored)", len(neutral_evals))
-    
-    # ===== IMPROVED SCORING LOGIC =====
-    
-    # Calculate scores - ONLY from SUPPORTS and REFUTES
-    support_score = sum(w for w, _ in supports_evals)
-    refute_score = sum(w for w, _ in refutes_evals)
-    
-    # CRITICAL: If there are ANY refutations, they carry significant weight
-    # A single strong refutation (from web/current source) can outweigh multiple supports
-    if refutes_evals:
-        # Check if refutation comes from web (current, real-time info)
-        web_refutations = sum(w for w, src in refutes_evals if src in ["web", "google_search"])
-        
-        # If we have web refutations, trust them heavily (they're current facts)
-        if web_refutations > 0:
-            logger.warning("⚠️  CRITICAL: Found refutation from web source (current info)")
-            # Boost refutation credibility - web sources are MORE authoritative for current facts
-            refute_score = refute_score * 1.5
-    
-    # Raw score: positive for supports, negative for refutes
-    raw_score = support_score - refute_score
-    total_weighted_evidence = support_score + refute_score
-    
-    # Normalized score: -1.0 to +1.0
-    if total_weighted_evidence == 0:
-        # No actual evidence (only NOT_ENOUGH_INFO) - return neutral
-        normalized = 0.0
-        confidence = 0.0
-        verdict = "Unverified / Insufficient Evidence"
-        logger.warning("📊 No actual evidence found (only NOT_ENOUGH_INFO)")
-        return {
-            "verdict": verdict,
-            "score": 0.0,
-            "raw_score": 0,
-            "total_weight": 0,
-            "confidence": 0.0,
+            "total_weight": verdict_result.total_evidence,
             "breakdown": {
-                "SUPPORTS": len(supports_evals),
-                "REFUTES": len(refutes_evals),
-                "NOT_ENOUGH_INFO": len(neutral_evals)
-            }
+                "SUPPORTS": verdict_result.supports_count,
+                "REFUTES": verdict_result.refutes_count,
+                "NOT_ENOUGH_INFO": 0  # Binary classification - no middle ground
+            },
+            "reasoning": verdict_result.reasoning,
+            "detailed_analysis": verdict_result
         }
-    else:
-        normalized = raw_score / total_weighted_evidence
-    
-    logger.warning("📊 Evidence calculation:")
-    logger.warning("   Support Score: %.1f", support_score)
-    logger.warning("   Refute Score: %.1f", refute_score)
-    logger.warning("   Raw Score: %.1f", raw_score)
-    logger.warning("   Total Weighted Evidence: %.1f", total_weighted_evidence)
-    logger.warning("   Normalized Score: %.2f", normalized)
-    
-    # Generate verdict based on normalized score
-    verdict, confidence = _generate_verdict_and_confidence(
-        normalized,
-        len(supports_evals),
-        len(refutes_evals),
-        len(neutral_evals)
-    )
-    
-    logger.warning("   → Verdict: %s (confidence: %.1f%%)", verdict, confidence * 100)
-    
-    return {
-        "verdict": verdict,
-        "score": normalized,
-        "raw_score": raw_score,
-        "total_weight": total_weighted_evidence,
-        "confidence": confidence,
-        "breakdown": {
-            "SUPPORTS": len(supports_evals),
-            "REFUTES": len(refutes_evals),
-            "NOT_ENOUGH_INFO": len(neutral_evals)
-        }
-    }
+
+    @staticmethod
+    def _verdict_to_score(verdict: str) -> float:
+        """Convert verdict to numerical score for backward compatibility"""
+        verdict_lower = verdict.lower()
+        
+        if verdict_lower == "true":
+            return 0.95
+        elif verdict_lower == "false":
+            return -0.95
+        else:  # INCONCLUSIVE
+            return 0.0
 
 
-def _generate_verdict_and_confidence(normalized_score, support_count, refute_count, neutral_count):
-    """Generate verdict and confidence based on evidence - IMPROVED to handle refutations."""
+def aggregate_evaluations(evaluations: List[Dict]) -> Dict:
+    """
+    Adapter function for backward compatibility with existing code
+    Converts binary evaluations to simple 3-level verdict
+    """
+    agent = AdvancedVerdictAgent()
+    verdict_result = agent.aggregate_with_advanced_scoring("Unknown claim", evaluations)
     
-    total_evidence = support_count + refute_count
-    
-    # ===== REFUTATION TAKES PRIORITY =====
-    
-    # If there are ANY refutations, they are very significant
-    if refute_count > 0:
-        # Even one refutation significantly reduces confidence
-        if normalized_score < -0.5:
-            return "False", 0.85
-        elif normalized_score < -0.2:
-            return "Likely False", 0.70
-        elif normalized_score < 0:
-            return "Likely False", 0.60
-        else:
-            # Mixed evidence, but refutations exist - still lean toward false
-            return "Mixed Evidence / Likely False", 0.55
-    
-    # If mostly refuting evidence (but no refutes found - shouldn't happen)
-    if refute_count > support_count * 1.5:
-        if normalized_score < -0.8:
-            return "False", 0.95
-        elif normalized_score < -0.5:
-            return "Likely False", 0.75
-        elif normalized_score < -0.2:
-            return "Mostly False", 0.60
-        else:
-            return "Likely False", 0.60
-    
-    # If mostly supporting evidence
-    elif support_count > refute_count * 1.5:
-        if normalized_score > 0.8:
-            return "True", 0.95
-        elif normalized_score > 0.5:
-            return "Likely True", 0.75
-        elif normalized_score > 0.2:
-            return "Mostly True", 0.60
-        else:
-            return "Likely True", 0.60
-    
-    # Balanced evidence (mixed)
-    else:
-        if normalized_score > 0.3:
-            return "Likely True", 0.50
-        elif normalized_score < -0.3:
-            return "Likely False", 0.50
-        else:
-            return "Mixed Evidence / Inconclusive", 0.40
-    
-    # Fallback
-    return "Unverified", 0.30
-
-
-def calculate_confidence_from_evidence_quality(support_count, refute_count, neutral_count, normalized_score):
-    """Calculate confidence based on evidence quality and consensus."""
-    
-    total_evidence = support_count + refute_count
-    
-    if total_evidence == 0:
-        return 0.0
-    
-    # Base confidence from normalized score magnitude
-    base_confidence = min(abs(normalized_score), 1.0)
-    
-    # CRITICAL: Refutations boost confidence (they're definitive)
-    if refute_count > 0:
-        base_confidence = min(base_confidence + 0.30, 1.0)
-    
-    # Boost if there's strong consensus (one direction dominates)
-    if support_count > refute_count * 2:
-        base_confidence = min(base_confidence + 0.25, 1.0)
-    elif refute_count > support_count * 2:
-        base_confidence = min(base_confidence + 0.25, 1.0)
-    
-    # Reduce if evidence is sparse
-    if total_evidence < 3:
-        base_confidence = max(base_confidence * 0.6, 0.3)
-    
-    # Reduce if high amount of NOT_ENOUGH_INFO (suggests weak evidence base)
-    if neutral_count > total_evidence:
-        base_confidence = max(base_confidence * 0.5, 0.2)
-    
-    return min(base_confidence, 1.0)
+    # Convert to old format
+    return agent.convert_to_old_format(verdict_result)

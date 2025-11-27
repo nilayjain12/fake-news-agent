@@ -1,92 +1,137 @@
 # backend/agents/claim_extraction_agent.py
-"""Extracts meaningful claims from article text with better heuristics."""
-import re
-from config import get_logger
+"""LLM-based claim extraction agent with comprehensive instructions."""
+from google import genai
+from config import GEMINI_API_KEY, ADK_MODEL_NAME, get_logger
+import json
+import os
 
 logger = get_logger(__name__)
 
+# Set up the Gemini client
+os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
+client = genai.Client(api_key=GEMINI_API_KEY)
+
 
 class ClaimExtractionAgent:
-    """Extracts factual claims from article text using improved heuristics."""
+    """Extracts factual claims from text using LLM with intelligent reasoning."""
     
-    def __init__(self, max_claims: int = 5):
+    def __init__(self, max_claims: int = 1):
         self.max_claims = max_claims
-        logger.warning("🎯 ClaimExtractionAgent initialized (max_claims=%d)", max_claims)
+        self.model = ADK_MODEL_NAME
+        logger.warning("🎯 ClaimExtractionAgent (LLM-based) initialized (max_claims=%d)", max_claims)
+
+    def _build_extraction_prompt(self, text: str) -> str:
+        """Build instruction prompt that summarizes into ONE claim."""
+        prompt = f"""You are an expert fact-checker. Your task is to analyze the given input and extract the PRIMARY/MAIN claim as a single, clear, verifiable statement.
+
+    INSTRUCTIONS:
+    1. **Identify Main Claim**: Find the central factual assertion in the input
+    2. **Summarize**: Combine related information into ONE comprehensive claim
+    3. **Exclude Sub-details**: Don't break into separate claims for date, location, age, etc.
+    4. **Preserve Intent**: Keep the core meaning of what user is asking
+    5. **Make Self-Contained**: Include enough context to be understood independently
+
+    IMPORTANT:
+    - Return ONLY ONE main claim (not multiple)
+    - If input has multiple unrelated claims, pick the PRIMARY one
+    - Sub-details (date, location, cause) should be PART OF the main claim
+    - Do NOT decompose into granular facts
+
+    INPUT TEXT:
+    "{text}"
+
+    RESPONSE FORMAT:
+    Return ONLY a JSON object (no markdown, no extra text):
+    {{
+    "main_claim": "The single, comprehensive, verifiable claim",
+    "claim_type": "person/event/organization/statistic/other",
+    "confidence_in_input": "high/medium/low",
+    "summary": "One sentence explaining the claim"
+    }}
+
+    EXAMPLES:
+    Input: "Dharmendra died recently"
+    Output: {{"main_claim": "Bollywood actor Dharmendra died recently", "claim_type": "person", ...}}
+
+    Input: "The Great Wall is visible from space with naked eye"
+    Output: {{"main_claim": "The Great Wall of China is visible from space with naked eye", "claim_type": "fact", ...}}
+
+    CRITICAL: Return ONLY valid JSON, nothing else."""
+        return prompt
 
     def run(self, article_text: str) -> list:
-        """
-        Extract meaningful claims from text using improved heuristics.
-        Prioritizes declarative statements that can be fact-checked.
-        """
-        logger.warning("📖 Extracting claims from text (length=%d)", len(article_text) if article_text else 0)
+        """Extract SINGLE main claim instead of multiple sub-claims."""
+        logger.warning("📖 Extracting main claim from text (length=%d)", len(article_text) if article_text else 0)
         
         if not article_text or len(article_text.strip()) == 0:
             logger.warning("⚠️  Empty input")
             return []
         
-        # Split into sentences
-        sentences = re.split(r'[.!?\n]+', article_text)
+        try:
+            prompt = self._build_extraction_prompt(article_text[:2000])
+            
+            response = client.models.generate_content(
+                model=self.model,
+                contents=prompt
+            )
+            
+            response_text = response.text if hasattr(response, 'text') else str(response)
+            logger.warning("📝 Raw extraction response: %s", response_text[:200])
+            
+            try:
+                # Parse JSON
+                json_str = response_text
+                if "```json" in response_text:
+                    json_str = response_text.split("```json")[1].split("```")[0]
+                elif "```" in response_text:
+                    json_str = response_text.split("```")[1].split("```")[0]
+                
+                parsed = json.loads(json_str.strip())
+                
+                # Extract the SINGLE main claim
+                main_claim = parsed.get("main_claim", "")
+                
+                if main_claim.strip():
+                    logger.warning("✅ Extracted main claim: %s", main_claim[:80])
+                    # Return as single-item list for compatibility
+                    return [main_claim]
+                else:
+                    logger.warning("⚠️  Empty claim extracted")
+                    return []
+                
+            except json.JSONDecodeError as e:
+                logger.warning("⚠️  Could not parse JSON: %s", str(e)[:50])
+                if response_text.strip():
+                    logger.warning("⚠️  Using response as fallback claim")
+                    return [response_text[:500]]
+                return []
+        
+        except Exception as e:
+            logger.warning("❌ Error extracting claim: %s", str(e)[:100])
+            return self._fallback_extraction(article_text)
+    
+    def _fallback_extraction(self, text: str) -> list:
+        """Fallback: Return first sentence as the claim."""
+        logger.warning("⚠️  Using fallback extraction")
+        import re
+        
+        sentences = re.split(r'[.!?\n]+', text)
         sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
         
-        if not sentences:
-            logger.warning("⚠️  No sentences found")
-            return []
+        if sentences:
+            claim = sentences[0]
+            logger.warning("✅ Fallback claim: %s", claim[:80])
+            return [claim]
         
-        # Filter for factual claims (exclude questions, opinions, etc.)
-        claims = []
-        for sentence in sentences:
-            if self._is_factual_claim(sentence):
-                claims.append(sentence)
-                if len(claims) >= self.max_claims:
-                    break
-        
-        # If no factual claims found, use first sentences anyway
-        if not claims:
-            claims = sentences[:self.max_claims]
-        
-        logger.warning("✅ Extracted %d claims", len(claims))
-        for i, claim in enumerate(claims, 1):
-            logger.warning("   %d. %s", i, claim[:80])
-        
-        return claims
+        return []
     
-    def _is_factual_claim(self, sentence: str) -> bool:
-        """
-        Check if a sentence is a factual claim that can be verified.
-        Returns True if it looks like a verifiable statement.
-        """
-        
-        # Reject questions
+    def _is_likely_claim(self, sentence: str) -> bool:
+        """Quick check if sentence is likely a factual claim."""
         if sentence.strip().endswith('?'):
             return False
         
-        # Reject very short sentences
-        if len(sentence.strip()) < 15:
-            return False
-        
-        # Reject sentences that are mostly interrogative
-        if sentence.lower().startswith(('what', 'why', 'how', 'when', 'where', 'who', 'which')):
-            if sentence.strip().endswith('?'):
-                return False
-            # Some "what is..." statements are OK, but usually not
-            if sentence.lower().startswith('what is'):
-                return True
-        
-        # Reject overly opinionated language
-        opinion_words = ['believe', 'think', 'feel', 'seems', 'might', 'could', 'should', 
-                        'possibly', 'perhaps', 'apparently', 'allegedly']
-        sentence_lower = sentence.lower()
-        
-        # Count opinion words - if too many, it's probably not a factual claim
-        opinion_count = sum(1 for word in opinion_words if f' {word} ' in f' {sentence_lower} ')
-        if opinion_count > 2:
-            return False
-        
-        # Accept sentences with factual markers
         factual_markers = ['is', 'was', 'are', 'were', 'has', 'have', 'caused', 
                           'occurred', 'happened', 'found', 'discovered', 'measured',
                           'calculated', 'proved', 'shows', 'demonstrates']
         
-        has_factual_marker = any(f' {marker} ' in f' {sentence_lower} ' for marker in factual_markers)
-        
-        return has_factual_marker or len(sentence) > 40  # Long sentences are usually claims
+        return any(f' {marker} ' in f' {sentence.lower()} ' for marker in factual_markers)
