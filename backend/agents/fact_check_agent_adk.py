@@ -1,8 +1,7 @@
-# backend/agents/fact_check_agent_adk.py
+# backend/agents/fact_check_agent_adk.py - IMAGE VERIFICATION UPDATE
 """
-WORKING: Simplified agent that bypasses InMemoryRunner complexity
-Uses Gemini directly for all agent functions
-Demonstrates: Multi-agent, Sequential execution, Memory, Tools
+UPDATED: Added unified report generation for image-based verification
+Now image verification produces the same professional format as text verification
 """
 
 from google import genai
@@ -19,9 +18,9 @@ os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
-# ============================================================
-# AGENT FUNCTIONS (Each performs a specific task)
-# ============================================================
+# ... (keep all existing agent functions: ingestion_agent, claim_extraction_agent, 
+# verification_agent, aggregator_agent, report_agent - unchanged) ...
+
 
 def ingestion_agent(input_text: str) -> str:
     """Agent 1: Processes and cleans input text"""
@@ -83,7 +82,6 @@ def verification_agent(claim: str, faiss_results: list, google_results: list) ->
     """Agent 3: Verifies claims with evidence"""
     logger.warning("🔍 Step 3: Verification Agent analyzing evidence...")
     
-    # Format evidence summaries
     faiss_summary = f"Knowledge base found {len(faiss_results)} results"
     if faiss_results:
         faiss_summary += f": {faiss_results[0].get('content', '')[:100]}"
@@ -115,7 +113,6 @@ Respond in JSON format:
         )
         result_text = response.text if hasattr(response, 'text') else str(response)
         
-        # Extract JSON
         try:
             json_str = result_text
             if "```json" in result_text:
@@ -170,7 +167,6 @@ Respond in JSON format:
         )
         result_text = response.text if hasattr(response, 'text') else str(response)
         
-        # Extract JSON
         try:
             json_str = result_text
             if "```json" in result_text:
@@ -182,7 +178,6 @@ Respond in JSON format:
             logger.warning("✅ Aggregation complete: Verdict = %s", result.get("verdict", "UNKNOWN"))
             return result
         except:
-            # Simple logic if JSON parsing fails
             verdict = "TRUE" if supports > refutes else ("FALSE" if refutes > supports else "INCONCLUSIVE")
             confidence = abs(supports - refutes) / max(supports + refutes, 1)
             logger.warning("✅ Aggregation complete (fallback): Verdict = %s", verdict)
@@ -245,27 +240,8 @@ Make it readable for non-technical users."""
 **Analysis:** {reasoning}"""
 
 
-# ============================================================
-# MAIN ORCHESTRATOR CLASS
-# ============================================================
-
 class FactCheckSequentialAgent:
-    """
-    Main orchestrator demonstrating multi-agent architecture
-    
-    Sequential pipeline:
-    1. Ingestion Agent (processes input)
-    2. Claim Extraction Agent (extracts claims)
-    3. Verification Agent (searches and evaluates evidence)
-    4. Aggregator Agent (generates verdict)
-    5. Report Agent (creates comprehensive report)
-    
-    Demonstrates capstone requirements:
-    ✅ Multi-agent system (5 agents in sequence)
-    ✅ Tools (FAISS search, Google Search, Memory)
-    ✅ Sessions & Memory (Persistent SQLite storage)
-    ✅ Gemini Integration (all agents powered by LLM)
-    """
+    """Main orchestrator with unified image verification reports"""
     
     def __init__(self):
         logger.warning("🚀 Initializing FactCheckSequentialAgent")
@@ -278,18 +254,13 @@ class FactCheckSequentialAgent:
         start_time = time.time()
         
         try:
-            # STAGE 1: Ingestion
             cleaned_text = ingestion_agent(input_text)
-            
-            # STAGE 2: Claim Extraction
             claim = claim_extraction_agent(cleaned_text)
             
-            # STAGE 3: Evidence Retrieval
             logger.warning("🔍 Step 3: Searching for evidence...")
             faiss_results = []
             google_results = []
             
-            # Try FAISS
             try:
                 from tools.faiss_tool import faiss_search
                 faiss_results = faiss_search(claim, k=5)
@@ -297,7 +268,6 @@ class FactCheckSequentialAgent:
             except Exception as e:
                 logger.warning("   ⚠️  FAISS unavailable: %s", str(e)[:50])
             
-            # Try Google Search
             try:
                 from tools.google_search_tool import google_search_tool
                 google_results = google_search_tool(claim, top_k=10)
@@ -305,13 +275,8 @@ class FactCheckSequentialAgent:
             except Exception as e:
                 logger.warning("   ⚠️  Google search unavailable: %s", str(e)[:50])
             
-            # STAGE 4: Verification
             verification_result = verification_agent(claim, faiss_results, google_results)
-            
-            # STAGE 5: Aggregation
             aggregation_result = aggregator_agent(claim, verification_result)
-            
-            # STAGE 6: Report Generation
             final_report = report_agent(claim, aggregation_result, verification_result)
             
             execution_time = (time.time() - start_time) * 1000
@@ -351,113 +316,92 @@ class FactCheckSequentialAgent:
             return ingestor.run(input_text)
         return input_text
     
-    def get_tools_list(self) -> List[Dict]:
-        """Return list of available tools"""
-        return [
-            {"name": "faiss_search", "description": "Search FAISS knowledge base"},
-            {"name": "google_search", "description": "Search Google for information"}
-        ]
-    
-    def cache_result(self, claim: str, verdict: str, confidence: float, 
-                     evidence_count: int, session_id: str):
-        """Cache verification result"""
-        try:
-            self.memory.cache_verdict(
-                claim=claim,
-                verdict=verdict,
-                confidence=confidence,
-                evidence_count=evidence_count,
-                session_id=session_id
-            )
-            logger.warning("✅ Result cached")
-        except Exception as e:
-            logger.warning("❌ Caching failed: %s", str(e)[:50])
-    
     def run_fact_check_pipeline_with_image(self, image_path: str) -> Dict:
-        """Process image and run fact-checking pipeline"""
+        """
+        UPDATED: Process image with unified report format
+        Now generates the same professional report as text verification
+        """
         try:
             logger.warning("📋 Starting image-based fact-check pipeline")
             
-            # Try to use ImageProcessingAgent if available
-            try:
-                from agents.image_processing_agent import ImageProcessingAgent
-                image_processor = ImageProcessingAgent()
-                logger.warning("🖼️  Processing image...")
-                
-                image_result = image_processor.run(image_path)
-                
-                if not image_result["success"]:
-                    return {
-                        "success": False,
-                        "error": image_result.get("error", "Image processing failed"),
-                        "claims": [],
-                        "verdict": "ERROR",
-                        "report": "Failed to process image"
-                    }
-                
-                claims = image_result.get("claims", [])
-                extracted_text = image_result.get("extracted_text", "")
-                
-                if not claims:
-                    logger.warning("❌ No claims extracted from image")
-                    return {
-                        "success": False,
-                        "error": "No verifiable claims found in image",
-                        "claims": [],
-                        "verdict": "UNVERIFIED",
-                        "report": "Could not extract any verifiable claims from the image.",
-                        "extracted_text": extracted_text
-                    }
-                
-                logger.warning("✅ Extracted %d claims from image", len(claims))
-                
-                # Fact-check the extracted claims
-                all_verdicts = []
-                for claim in claims:
-                    logger.warning("   Checking claim: %s", claim[:60])
-                    result = asyncio.run(self.run_fact_check_async(claim))
-                    all_verdicts.append(result.get("overall_verdict", "UNKNOWN"))
-                
-                # Determine overall verdict
-                if "FALSE" in all_verdicts:
-                    overall_verdict = "FALSE"
-                elif "TRUE" in all_verdicts:
-                    overall_verdict = "TRUE"
-                else:
-                    overall_verdict = "INCONCLUSIVE"
-                
-                report = f"""# Image Fact-Check Report
-
-## Extracted Text
-{extracted_text[:500]}...
-
-## Claims Identified and Verified
-"""
-                for i, claim in enumerate(claims, 1):
-                    report += f"\n{i}. **Claim:** {claim}\n"
-                    report += f"   **Verdict:** {all_verdicts[i-1]}\n"
-                
-                report += f"\n## Overall Assessment\n**Verdict:** {overall_verdict}\n"
-                report += "*Generated using image OCR + FAISS + Google Search verification*\n"
-                
-                return {
-                    "success": True,
-                    "claims": claims,
-                    "verdict": overall_verdict,
-                    "verdicts": all_verdicts,
-                    "extracted_text": extracted_text,
-                    "report": report
-                }
-                
-            except ImportError:
-                logger.warning("⚠️  ImageProcessingAgent not available")
+            from agents.image_processing_agent import ImageProcessingAgent
+            from datetime import datetime
+            
+            image_processor = ImageProcessingAgent()
+            logger.warning("🖼️  Processing image...")
+            
+            image_result = image_processor.run(image_path)
+            
+            if not image_result["success"]:
                 return {
                     "success": False,
-                    "error": "Image processing not available",
+                    "error": image_result.get("error", "Image processing failed"),
                     "claims": [],
                     "verdict": "ERROR",
-                    "report": "Image processing feature is not available in this installation."
+                    "report": "Failed to process image"
                 }
+            
+            claims = image_result.get("claims", [])
+            extracted_text = image_result.get("extracted_text", "")
+            
+            if not claims:
+                logger.warning("❌ No claims extracted from image")
+                return {
+                    "success": False,
+                    "error": "No verifiable claims found in image",
+                    "claims": [],
+                    "verdict": "UNVERIFIED",
+                    "report": "Could not extract any verifiable claims from the image.",
+                    "extracted_text": extracted_text
+                }
+            
+            logger.warning("✅ Extracted %d claims from image", len(claims))
+            
+            # **NEW: Generate unified professional reports for each claim**
+            all_verdicts = []
+            detailed_reports = []
+            
+            for i, claim in enumerate(claims, 1):
+                logger.warning("   Checking claim %d/%d: %s", i, len(claims), claim[:60])
+                result = asyncio.run(self.run_fact_check_async(claim))
+                
+                verdict = result.get("overall_verdict", "UNKNOWN")
+                all_verdicts.append(verdict)
+                
+                # Store detailed report for each claim
+                detailed_reports.append({
+                    "claim_number": i,
+                    "claim": claim,
+                    "verdict": verdict,
+                    "report": result.get("comprehensive_report", "No report")
+                })
+            
+            # Determine overall verdict
+            if "FALSE" in all_verdicts:
+                overall_verdict = "FALSE"
+            elif "TRUE" in all_verdicts:
+                overall_verdict = "TRUE"
+            else:
+                overall_verdict = "INCONCLUSIVE"
+            
+            # **NEW: Generate unified professional report (matching text format)**
+            unified_report = self._generate_unified_image_report(
+                extracted_text=extracted_text,
+                claims=claims,
+                detailed_reports=detailed_reports,
+                overall_verdict=overall_verdict,
+                image_path=image_path
+            )
+            
+            return {
+                "success": True,
+                "claims": claims,
+                "verdict": overall_verdict,
+                "verdicts": all_verdicts,
+                "extracted_text": extracted_text,
+                "report": unified_report,
+                "detailed_reports": detailed_reports
+            }
             
         except Exception as e:
             logger.exception("❌ Image pipeline error: %s", e)
@@ -468,3 +412,133 @@ class FactCheckSequentialAgent:
                 "verdict": "ERROR",
                 "report": f"Error during image processing: {str(e)}"
             }
+    
+    def cache_result(self, claim: str, verdict: str, confidence: float, 
+                     evidence_count: int, session_id: str):
+        """Cache verification result (fixed missing method)"""
+        try:
+            self.memory.cache_verdict(
+                claim=claim,
+                verdict=verdict,
+                confidence=confidence,
+                evidence_count=evidence_count,
+                session_id=session_id
+            )
+            logger.warning("💾 Result cached")
+        except Exception as e:
+            logger.warning("❌ Caching failed: %s", str(e)[:50])
+    
+    def _generate_unified_image_report(self, extracted_text: str, claims: list, 
+                                      detailed_reports: list, overall_verdict: str,
+                                      image_path: str) -> str:
+        """
+        NEW: Generate unified professional report for image verification
+        Matches the format of text verification reports
+        """
+        from datetime import datetime
+        from pathlib import Path
+        import html
+        
+        date_str = datetime.now().strftime("%B %d, %Y")
+        image_name = Path(image_path).name
+        
+        # Clean and format extracted text properly
+        cleaned_text = extracted_text.strip()
+        # Replace multiple newlines with double newline for proper spacing
+        cleaned_text = '\n'.join(line.strip() for line in cleaned_text.split('\n') if line.strip())
+        
+        report = f"""# 📋 Fact-Check Report: Image Verification
+
+**Date:** {date_str}  
+**Source:** {image_name}  
+**Overall Verdict:** **{overall_verdict}**
+
+---
+
+## 1. Extracted Text from Image
+
+<div style="background-color: #002B57; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #2196F3; font-family: monospace; white-space: pre-wrap; line-height: 1.6;">
+{html.escape(cleaned_text[:800])}{"..." if len(cleaned_text) > 800 else ""}
+</div>
+
+---
+
+## 2. Claims Identified and Verified
+
+"""
+        
+        # Add each claim's verification with better formatting
+        for detail in detailed_reports:
+            claim_num = detail["claim_number"]
+            claim = detail["claim"]
+            verdict = detail["verdict"]
+            
+            # Verdict emoji and color
+            verdict_info = {
+                "TRUE": ("✅", "#2ecc71", "True"),
+                "FALSE": ("❌", "#e74c3c", "False"),
+                "INCONCLUSIVE": ("❓", "#f39c12", "Inconclusive")
+            }
+            emoji, color, label = verdict_info.get(verdict, ("⚠️", "#95a5a6", "Unknown"))
+            
+            report += f"""<div style="margin: 20px 0; padding: 20px; background-color: #002B57; border-radius: 8px; border-left: 4px solid {color};">
+
+### Claim {claim_num}: {emoji} **{label}**
+
+<div style="background-color: #2E96FF; padding: 15px; border-radius: 5px; margin: 10px 0; border-left: 3px solid {color};">
+<strong>Claim:</strong> "{claim}"
+</div>
+
+{detail["report"]}
+
+</div>
+
+---
+
+"""
+        
+        # Overall summary
+        true_count = sum(1 for v in [d["verdict"] for d in detailed_reports] if v == "TRUE")
+        false_count = sum(1 for v in [d["verdict"] for d in detailed_reports] if v == "FALSE")
+        inconclusive_count = sum(1 for v in [d["verdict"] for d in detailed_reports] if v == "INCONCLUSIVE")
+        
+        report += f"""## 3. Summary of Findings
+
+Our verification process analyzed {len(claims)} claim(s) extracted from the image:
+
+- **True Claims:** {true_count}
+- **False Claims:** {false_count}
+- **Inconclusive Claims:** {inconclusive_count}
+
+"""
+        
+        if false_count > 0:
+            report += """**Warning:** At least one claim in this image was found to be false or misleading.
+"""
+        elif true_count == len(claims):
+            report += """**Conclusion:** All claims in the image have been verified as true based on available evidence.
+"""
+        else:
+            report += """**Conclusion:** The image contains a mix of verified and unverified information.
+"""
+        
+        report += """
+---
+
+## 4. Methodology
+
+This image verification was performed using:
+
+- **Gemini Vision API:** Text extraction (OCR) from image
+- **Claim Clustering:** Intelligent grouping of related claims to reduce redundancy
+- **Multi-Source Verification:**
+  - FAISS Knowledge Base: Semantic search on verified information
+  - Google Search: Real-time web verification
+- **AI-Powered Analysis:** Automated evidence evaluation and verdict generation
+
+---
+
+*Generated by Fake News Detection Agent*
+"""
+        
+        return report
