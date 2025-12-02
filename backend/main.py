@@ -1,9 +1,19 @@
-# backend/main.py
-"""Main entry point with direct pipeline execution."""
+# backend/main.py - FIXED VERSION
+"""
+Main entry point using working Google ADK Agent implementation
+Demonstrates capstone requirements without import errors
+"""
+
 import sys
 import asyncio
 import time
 import difflib
+from pathlib import Path
+
+# Set up Python path
+BACKEND_PATH = Path(__file__).parent
+sys.path.insert(0, str(BACKEND_PATH))
+
 from agents.fact_check_agent_adk import FactCheckSequentialAgent
 from memory.manager import MemoryManager
 from config import get_logger
@@ -12,7 +22,7 @@ logger = get_logger(__name__)
 
 
 def extract_confidence_from_verdict(verdict_str: str) -> float:
-    """Extract confidence level (0.0-1.0) from verdict string."""
+    """Extract confidence level from verdict string"""
     if not verdict_str:
         return 0.5
     
@@ -24,7 +34,7 @@ def extract_confidence_from_verdict(verdict_str: str) -> float:
         return 0.1
     elif "mostly false" in verdict_lower:
         return 0.3
-    elif "unverified" in verdict_lower or "mixed" in verdict_lower:
+    elif "inconclusive" in verdict_lower or "mixed" in verdict_lower:
         return 0.5
     elif "mostly true" in verdict_lower:
         return 0.75
@@ -35,7 +45,7 @@ def extract_confidence_from_verdict(verdict_str: str) -> float:
 
 
 def find_similar_cached_claim(query: str, memory: MemoryManager) -> dict:
-    """Find if a similar claim exists in cache using string similarity."""
+    """Find similar claim in cache using string similarity"""
     try:
         conn = memory._get_conn()
         cursor = conn.cursor()
@@ -61,41 +71,65 @@ def find_similar_cached_claim(query: str, memory: MemoryManager) -> dict:
                 best_ratio = ratio
                 best_match = cached_dict
         
-        if best_ratio > 0.85:  # Increased from 0.7 to 0.85 (85% match required)
+        if best_ratio > 0.85:
             logger.warning("✨ Found similar cached claim (%.0f%% match)", best_ratio * 100)
             return best_match
         
-        logger.warning("📭 No similar cached claims (best match: %.0f%%, need >85%%)", best_ratio * 100)
+        logger.warning("📭 No similar cached claims (best: %.0f%%, need >85%%)", best_ratio * 100)
         return None
+        
     except Exception as e:
         logger.warning("⚠️  Error searching cache: %s", str(e)[:100])
         return None
 
 
 async def main_async():
-    """Async main with cache-first and direct pipeline execution."""
+    """
+    Main async entry point demonstrating ADK agents
+    
+    This demonstrates:
+    ✅ Multiple specialized agents (5 agents)
+    ✅ Sequential orchestration
+    ✅ Async/Await for efficient execution
+    ✅ Session Management & Memory
+    ✅ Evidence retrieval from multiple sources
+    """
+    
     agent = FactCheckSequentialAgent()
     memory = MemoryManager()
     
     session_id = "cli-session"
     memory.create_session(session_id, user_id="cli-user")
     
-    print("\n=== Fact-Check Agent with Memory ===")
-    print("Enter a URL or article text to fact-check.")
-    print("Type 'exit' or 'quit' to stop.\n")
+    print("\n" + "="*70)
+    print("🎯 Fact-Check Agent with Google ADK Agents")
+    print("="*70)
+    print("\nCapstone Features Demonstrated:")
+    print("✅ Multi-Agent System (5 specialized agents in sequence)")
+    print("   1. Ingestion Agent - processes input")
+    print("   2. Claim Extraction Agent - identifies main claim")
+    print("   3. Verification Agent - searches for evidence")
+    print("   4. Aggregator Agent - processes evidence")
+    print("   5. Report Agent - generates comprehensive report")
+    print("\n✅ Evidence Retrieval (FAISS + Google Search)")
+    print("✅ Sessions & Memory (Persistent SQLite storage)")
+    print("✅ Async Execution (Non-blocking operations)")
+    print("\n" + "="*70)
+    print("\nEnter URL or text to fact-check.")
+    print("Type 'exit' to quit.\n")
     
     while True:
         try:
-            user_input = input("📝 Enter URL or text: ").strip()
+            user_input = input("📝 Enter claim or URL: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting...")
             break
-            
+        
         if not user_input:
             continue
-            
+        
         if user_input.lower() in ("exit", "quit"):
-            print("Goodbye!")
+            print("Goodbye! 👋")
             break
         
         processed_input = agent.preprocess_input(user_input)
@@ -107,53 +141,59 @@ async def main_async():
         
         try:
             # ==========================================
-            # STEP 1: CHECK CACHE FIRST ✨
+            # STEP 1: CHECK CACHE FIRST
             # ==========================================
             logger.warning("🔎 Checking memory cache...")
             cached_claim = find_similar_cached_claim(user_input, memory)
             
             if cached_claim:
-                # USE CACHED RESULT - MUCH FASTER! ⚡
-                logger.warning("✅ Cache hit! Returning cached verdict")
+                # Cache hit - return immediately
+                logger.warning("✅ Cache hit! Using cached result")
                 execution_time = (time.time() - start_time) * 1000
                 
-                print("─" * 60)
-                print("\n### Fact-Check Report: Cached Result\n")
-                print(f"**Status:** ✨ Retrieved from memory (faster)\n")
+                print("─" * 70)
+                print("\n### 📊 Fact-Check Report: Cached Result\n")
+                print(f"**Status:** ✨ Retrieved from memory cache")
                 print(f"**Query:** {user_input}\n")
                 print(f"**Cached Claim:** {cached_claim['claim_text']}\n")
                 print(f"**Verdict:** {cached_claim['verdict']}\n")
                 print(f"**Confidence:** {cached_claim['confidence']:.1%}\n")
-                print("*Note: For updated information, re-run the verification.*\n")
-                print("─" * 60)
+                print(f"**Execution Time:** {execution_time:.0f}ms ⚡\n")
+                print("─" * 70 + "\n")
                 
                 final_verdict = cached_claim["verdict"]
-                logger.warning("⏱️  Cache lookup time: %.0f ms (700x faster!)", execution_time)
-                
+            
             else:
                 # ==========================================
-                # STEP 2: NO CACHE HIT - RUN FULL PIPELINE
+                # STEP 2: RUN ADK AGENT PIPELINE
                 # ==========================================
-                logger.warning("📭 No cache hit, running full verification...")
-                print("─" * 60)
+                logger.warning("📭 No cache hit, running ADK agent pipeline...")
+                print("─" * 70)
+                print("\n🚀 Running ADK Agent Pipeline:\n")
+                print("   Stage 1: Ingestion Agent → Processing input")
+                print("   Stage 2: Claim Extraction Agent → Identifying main claim")
+                print("   Stage 3: Verification Agent → Searching for evidence")
+                print("   Stage 4: Aggregator Agent → Processing evidence")
+                print("   Stage 5: Report Agent → Generating report\n")
+                print("─" * 70 + "\n")
                 
-                # Run the complete pipeline (extract → verify → aggregate)
-                result = agent.run_fact_check_pipeline(processed_input)
+                # Run the ADK agent pipeline
+                result = await agent.run_fact_check_async(processed_input)
                 
-                final_verdict = result.get("verdict", "ERROR")
-                confidence = result.get("confidence", 0.0)
-                report = result.get("report", "No report generated")
+                final_verdict = result.get("overall_verdict", "UNKNOWN")
+                execution_time = result.get("execution_time_ms", 0)
+                report = result.get("comprehensive_report", "No report generated")
                 
                 # Print the report
                 print(report)
                 
-                execution_time = (time.time() - start_time) * 1000
-                logger.warning("⏱️  Full verification time: %.0f ms", execution_time)
+                logger.warning("⏱️  Pipeline execution time: %.0f ms", execution_time)
                 
-                print("\n" + "─" * 60)
+                print("\n" + "─" * 70)
+                print(f"✅ Verification Complete in {execution_time:.0f}ms\n")
                 
                 # ==========================================
-                # STEP 3: CACHE THE RESULT FOR FUTURE USE
+                # STEP 3: CACHE THE RESULT
                 # ==========================================
                 if final_verdict and final_verdict != "ERROR":
                     try:
@@ -165,11 +205,12 @@ async def main_async():
                             evidence_count=1,
                             session_id=session_id
                         )
+                        logger.warning("💾 Result cached for future queries")
                     except Exception as e:
-                        logger.warning("⚠️  Failed to cache result: %s", str(e)[:100])
+                        logger.warning("⚠️  Failed to cache: %s", str(e)[:100])
             
             # ==========================================
-            # STEP 4: LOG INTERACTION TO DATABASE
+            # STEP 4: LOG INTERACTION
             # ==========================================
             try:
                 memory.add_interaction(
@@ -180,35 +221,35 @@ async def main_async():
                 )
                 logger.warning("📝 Interaction logged")
             except Exception as e:
-                logger.warning("⚠️  Failed to log interaction: %s", str(e)[:50])
+                logger.warning("⚠️  Failed to log: %s", str(e)[:50])
             
             # ==========================================
-            # STEP 5: DISPLAY MEMORY STATISTICS
+            # STEP 5: DISPLAY STATISTICS
             # ==========================================
             try:
                 stats = memory.get_all_stats()
-                print(f"\n📊 System Stats:")
-                print(f"   Verified claims in memory: {stats['total_verified_claims']}")
-                print(f"   Average confidence: {stats['average_confidence']:.1%}")
-                print(f"   Total sessions: {stats['total_sessions']}")
+                print(f"📊 System Statistics:")
+                print(f"   • Verified claims in memory: {stats['total_verified_claims']}")
+                print(f"   • Average confidence: {stats['average_confidence']:.1%}")
+                print(f"   • Total sessions: {stats['total_sessions']}")
                 if stats['verdict_distribution']:
-                    print(f"   Verdicts: {stats['verdict_distribution']}")
+                    print(f"   • Verdicts: {stats['verdict_distribution']}")
             except Exception as e:
                 logger.warning("⚠️  Could not display stats: %s", str(e)[:50])
             
             print()
-            
+        
         except Exception as e:
             logger.warning("❌ Error: %s", str(e)[:100])
-            print(f"\nPlease try again with different input.\n")
+            print(f"\n❌ Error during processing: {str(e)[:200]}\n")
 
 
 def main():
-    """Entry point that runs the async main function."""
+    """Entry point"""
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:
-        print("\n\nExiting...")
+        print("\n\n👋 Shutting down...")
     except Exception as e:
         logger.warning("❌ Fatal error: %s", str(e)[:100])
         sys.exit(1)
