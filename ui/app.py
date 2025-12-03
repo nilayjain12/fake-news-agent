@@ -362,7 +362,7 @@ def chat_interface(message: str, history: list) -> tuple:
 
 # Create Gradio interface
 def create_interface():
-    """Create and return the Gradio interface (UPDATED)"""
+    """Create and return the Gradio interface (UPDATED CSS)"""
     
     initialize_agent()
     
@@ -397,14 +397,14 @@ def create_interface():
             color: white;
         }
         .thinking-process {
-            background-color: #ffffff;
+            background-color: #002B57;
             padding: 15px;
             border-radius: 10px;
             margin: 10px 0;
             border-left: 4px solid #667eea;
         }
         .stats-box {
-            background-color: #f5f5f5;
+            background-color: #002B57;
             padding: 15px;
             border-radius: 10px;
             margin: 10px 0;
@@ -428,7 +428,7 @@ def create_interface():
             padding: 15px;
             border: 2px solid #667eea;
             border-radius: 8px;
-            background-color: #ffffff;
+            background-color: #002B57;
         }
         details[open] {
             background-color: #f0f7ff;
@@ -445,6 +445,110 @@ def create_interface():
             color: #5568d3;
             background-color: #e8f0ff;
             border-radius: 4px;
+        }
+        
+        /* NEW: Image verification report styling */
+        .image-report-container div {
+            margin: 10px 0 !important;
+            line-height: 1.6 !important;
+        }
+        
+        .image-report-container pre {
+            background-color: #002B57;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #2196F3;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            line-height: 1.6;
+        }
+        
+        /* Ensure extracted text has proper margins and formatting */
+        .extracted-text-box {
+            background-color: #002B57 !important;
+            padding: 20px !important;
+            margin: 15px 0 !important;
+            border-radius: 8px !important;
+            border-left: 4px solid #2196F3 !important;
+            font-family: 'Courier New', monospace !important;
+            white-space: pre-wrap !important;
+            line-height: 1.8 !important;
+            overflow-x: auto !important;
+        }
+        
+        /* Claim boxes with colored borders */
+        .claim-box {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #2E96FF;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .claim-box-true {
+            border-left: 4px solid #2ecc71 !important;
+        }
+        
+        .claim-box-false {
+            border-left: 4px solid #e74c3c !important;
+        }
+        
+        .claim-box-inconclusive {
+            border-left: 4px solid #f39c12 !important;
+        }
+        
+        /* Summary boxes with icons */
+        .summary-box {
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border-left: 4px solid #2196F3;
+        }
+        
+        .summary-box-warning {
+            background-color: #ffebee;
+            border-left-color: #e74c3c;
+        }
+        
+        .summary-box-success {
+            background-color: #e8f5e9;
+            border-left-color: #2ecc71;
+        }
+        
+        .summary-box-info {
+            background-color: #fff3e0;
+            border-left-color: #f39c12;
+        }
+        
+        /* Better spacing for markdown rendered content */
+        .markdown-body {
+            padding: 15px !important;
+        }
+        
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+            margin-top: 20px !important;
+            margin-bottom: 15px !important;
+        }
+        
+        .markdown-body p {
+            margin: 10px 0 !important;
+            line-height: 1.6 !important;
+        }
+        
+        .markdown-body ul, .markdown-body ol {
+            margin: 10px 0 !important;
+            padding-left: 30px !important;
+        }
+        
+        .markdown-body li {
+            margin: 5px 0 !important;
+        }
+        
+        /* Ensure divs inside markdown render with proper spacing */
+        .markdown-body > div {
+            margin: 15px 0 !important;
         }
         """
     ) as demo:

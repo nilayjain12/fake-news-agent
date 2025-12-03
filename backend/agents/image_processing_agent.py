@@ -1,5 +1,8 @@
-# backend/agents/image_processing_agent.py
-"""Image processing agent for extracting and verifying text from images."""
+# backend/agents/image_processing_agent.py - UPDATED WITH CLUSTERING
+"""
+UPDATED: Image processing agent with claim clustering to reduce redundant verifications.
+Now clusters related claims before verification to save API calls and reduce resource exhaustion.
+"""
 import base64
 import json
 from pathlib import Path
@@ -10,13 +13,21 @@ import os
 logger = get_logger(__name__)
 
 class ImageProcessingAgent:
-    """Processes images to extract text and identify verifiable claims."""
+    """
+    UPDATED: Processes images with intelligent claim clustering.
+    
+    Workflow:
+    1. Extract text from image (OCR)
+    2. Identify verifiable claims
+    3. **NEW:** Cluster similar claims together
+    4. Return clustered claims for verification
+    """
     
     def __init__(self):
         os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
         self.client = genai.Client(api_key=GEMINI_API_KEY)
         self.model = ADK_MODEL_NAME
-        logger.warning("🖼️  ImageProcessingAgent initialized")
+        logger.warning("🖼️  ImageProcessingAgent initialized (WITH CLUSTERING)")
     
     def encode_image_to_base64(self, image_path: str) -> str:
         """Convert image file to base64 string."""
@@ -32,10 +43,8 @@ class ImageProcessingAgent:
         logger.warning("📸 Processing image: %s", Path(image_path).name)
         
         try:
-            # Encode image
             base64_image = self.encode_image_to_base64(image_path)
             
-            # Determine image type
             ext = Path(image_path).suffix.lower()
             mime_types = {
                 '.jpg': 'image/jpeg',
@@ -46,7 +55,6 @@ class ImageProcessingAgent:
             }
             mime_type = mime_types.get(ext, 'image/jpeg')
             
-            # Call Gemini Vision API
             prompt = """Extract ALL text visible in this image, including:
 - Headlines
 - Body text
@@ -83,7 +91,10 @@ Format the output as a coherent paragraph or list of statements."""
             raise
     
     def identify_claims_from_image(self, image_path: str) -> list:
-        """Extract text from image and identify verifiable claims."""
+        """
+        UPDATED: Extract text and identify claims, then cluster them.
+        This reduces redundant verifications significantly.
+        """
         try:
             # Step 1: Extract text
             text_content = self.extract_text_from_image(image_path)
@@ -92,18 +103,62 @@ Format the output as a coherent paragraph or list of statements."""
                 logger.warning("⚠️  No text extracted from image")
                 return []
             
-            # Step 2: Identify claims using Gemini
-            prompt = f"""Analyze this text and identify specific factual claims that can be verified:
+            # Step 2: Identify ALL claims (may have duplicates/similar ones)
+            raw_claims = self._extract_raw_claims(text_content)
+            
+            if not raw_claims:
+                logger.warning("⚠️  No claims identified from text")
+                return []
+            
+            logger.warning("✅ Identified %d raw claims from image", len(raw_claims))
+            
+            # Step 3: **NEW** - Cluster similar claims
+            if len(raw_claims) > 1:
+                try:
+                    from agents.claim_clustering_agent import cluster_claims
+                    
+                    logger.warning("🔗 Clustering %d claims to reduce redundancy...", len(raw_claims))
+                    clustered_claims, metadata = cluster_claims(raw_claims)
+                    
+                    logger.warning("✅ Clustered %d → %d claims (%.0f%% reduction)",
+                                  metadata["original_count"],
+                                  metadata["clustered_count"],
+                                  metadata["reduction_percentage"])
+                    
+                    # Log clustering details
+                    for i, cluster_info in enumerate(metadata["clusters"], 1):
+                        logger.warning("   Cluster %d: %d claims → '%s'",
+                                      i, cluster_info["size"], cluster_info["summary"][:80])
+                    
+                    return clustered_claims
+                    
+                except Exception as e:
+                    logger.warning("⚠️  Clustering failed: %s", str(e)[:100])
+                    logger.warning("⚠️  Falling back to raw claims")
+                    return raw_claims
+            else:
+                # Only 1 claim - no clustering needed
+                return raw_claims
+                
+        except Exception as e:
+            logger.warning("❌ Error identifying claims: %s", str(e)[:100])
+            raise
+    
+    def _extract_raw_claims(self, text_content: str) -> list:
+        """Extract raw claims from text (before clustering)."""
+        prompt = f"""Analyze this text and identify ALL specific factual claims that can be verified:
 
 TEXT FROM IMAGE:
 {text_content}
 
-TASK: List 3-5 specific factual claims (statements of fact, not opinions).
+TASK: List ALL verifiable claims (statements of fact, not opinions).
 Format as JSON array:
 {{"claims": ["claim 1", "claim 2", ...]}}
 
-Include ONLY verifiable claims, exclude opinions."""
-            
+Include ONLY verifiable factual claims, exclude opinions.
+Be comprehensive - extract ALL claims, even if they seem related."""
+        
+        try:
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=prompt
@@ -113,7 +168,6 @@ Include ONLY verifiable claims, exclude opinions."""
             
             # Parse JSON response
             try:
-                # Extract JSON from response (handle markdown code blocks)
                 json_str = response_text
                 if "```json" in response_text:
                     json_str = response_text.split("```json")[1].split("```")[0]
@@ -122,23 +176,34 @@ Include ONLY verifiable claims, exclude opinions."""
                 
                 parsed = json.loads(json_str)
                 claims = parsed.get("claims", [])
-                logger.warning("✅ Identified %d claims from image", len(claims))
+                logger.warning("✅ Extracted %d raw claims", len(claims))
                 return claims
             except json.JSONDecodeError as e:
                 logger.warning("⚠️  Could not parse JSON response: %s", str(e)[:50])
-                # Fallback: return text as single claim
                 return [text_content[:500]] if text_content else []
                 
         except Exception as e:
-            logger.warning("❌ Error identifying claims: %s", str(e)[:100])
-            raise
+            logger.warning("❌ Error extracting raw claims: %s", str(e)[:100])
+            return []
     
     def run(self, image_path: str) -> dict:
-        """Process image and return extracted text and claims."""
+        """
+        UPDATED: Process image and return clustered claims.
+        
+        Returns:
+            {
+                "success": bool,
+                "image_path": str,
+                "extracted_text": str,
+                "claims": list,  # Now clustered/summarized
+                "claim_count": int,
+                "clustering_metadata": dict  # NEW: clustering info
+            }
+        """
         try:
             logger.warning("🖼️  Processing image for verification")
             
-            # Extract claims
+            # Extract and cluster claims
             claims = self.identify_claims_from_image(image_path)
             
             # Also get raw text
