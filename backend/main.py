@@ -1,128 +1,62 @@
-# backend/main.py - FIXED VERSION
+# backend/main.py
 """
-Main entry point using working Google ADK Agent implementation
-Demonstrates capstone requirements without import errors
+Main CLI Entry Point - Pure Google ADK Implementation
+Demonstrates the complete ADK-based fact-checking pipeline
 """
-
 import sys
 import asyncio
-import time
-import difflib
 from pathlib import Path
 
-# Set up Python path
+# Setup path
 BACKEND_PATH = Path(__file__).parent
 sys.path.insert(0, str(BACKEND_PATH))
 
-from agents.fact_check_agent_adk import FactCheckSequentialAgent
+from agents.adk_pipeline import create_fact_check_pipeline
 from memory.manager import MemoryManager
 from config import get_logger
 
 logger = get_logger(__name__)
 
 
-def extract_confidence_from_verdict(verdict_str: str) -> float:
-    """Extract confidence level from verdict string"""
-    if not verdict_str:
-        return 0.5
-    
-    verdict_lower = verdict_str.lower()
-    
-    if "error" in verdict_lower:
-        return 0.0
-    elif "false" in verdict_lower and "mostly" not in verdict_lower:
-        return 0.1
-    elif "mostly false" in verdict_lower:
-        return 0.3
-    elif "inconclusive" in verdict_lower or "mixed" in verdict_lower:
-        return 0.5
-    elif "mostly true" in verdict_lower:
-        return 0.75
-    elif "true" in verdict_lower and "false" not in verdict_lower:
-        return 0.9
-    else:
-        return 0.5
-
-
-def find_similar_cached_claim(query: str, memory: MemoryManager) -> dict:
-    """Find similar claim in cache using string similarity"""
-    try:
-        conn = memory._get_conn()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM verified_claims ORDER BY retrieved_at DESC LIMIT 20")
-        cached_claims = cursor.fetchall()
-        conn.close()
-        
-        if not cached_claims:
-            logger.warning("📭 No cached claims found")
-            return None
-        
-        best_match = None
-        best_ratio = 0
-        
-        for cached_row in cached_claims:
-            cached_dict = dict(cached_row)
-            cached_claim = cached_dict["claim_text"]
-            ratio = difflib.SequenceMatcher(None, query.lower(), cached_claim.lower()).ratio()
-            
-            logger.warning("   Checking: %s (%.0f%% match)", cached_claim[:60], ratio * 100)
-            
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_match = cached_dict
-        
-        if best_ratio > 0.85:
-            logger.warning("✨ Found similar cached claim (%.0f%% match)", best_ratio * 100)
-            return best_match
-        
-        logger.warning("📭 No similar cached claims (best: %.0f%%, need >85%%)", best_ratio * 100)
-        return None
-        
-    except Exception as e:
-        logger.warning("⚠️  Error searching cache: %s", str(e)[:100])
-        return None
-
-
 async def main_async():
     """
-    Main async entry point demonstrating ADK agents
+    Main async entry point demonstrating pure ADK pipeline
     
-    This demonstrates:
-    ✅ Multiple specialized agents (5 agents)
-    ✅ Sequential orchestration
-    ✅ Async/Await for efficient execution
-    ✅ Session Management & Memory
-    ✅ Evidence retrieval from multiple sources
+    Features:
+    ✅ Complete ADK SequentialAgent pipeline
+    ✅ 6 specialized agents (5 LlmAgent + 1 Custom Agent)
+    ✅ Async/await for efficient execution
+    ✅ Session management & memory caching
+    ✅ Event streaming for progress updates
+    ✅ Parallel evidence retrieval (FAISS + Google)
     """
     
-    agent = FactCheckSequentialAgent()
-    memory = MemoryManager()
+    # Initialize pipeline
+    pipeline = create_fact_check_pipeline()
+    memory = pipeline.memory
     
+    # Create session
     session_id = "cli-session"
     memory.create_session(session_id, user_id="cli-user")
     
     print("\n" + "="*70)
-    print("🎯 Fact-Check Agent with Google ADK Agents")
+    print("🎯 Fact-Check Agent - Pure Google ADK Implementation")
     print("="*70)
-    print("\nCapstone Features Demonstrated:")
-    print("✅ Multi-Agent System (5 specialized agents in sequence)")
-    print("   1. Ingestion Agent - processes input")
-    print("   2. Claim Extraction Agent - identifies main claim")
-    print("   3. Verification Agent - searches for evidence")
-    print("   4. Aggregator Agent - processes evidence")
-    print("   5. Report Agent - generates comprehensive report")
-    print("\n✅ Evidence Retrieval (FAISS + Google Search)")
-    print("✅ Sessions & Memory (Persistent SQLite storage)")
-    print("✅ Async Execution (Non-blocking operations)")
+    print("\n✨ ADK Features:")
+    print("  • SequentialAgent orchestration")
+    print("  • 5 LlmAgent + 1 Custom Agent")
+    print("  • FunctionTool integration (FAISS + Google)")
+    print("  • Session-based state management")
+    print("  • Event streaming for real-time updates")
+    print("  • Memory caching for fast repeated queries")
     print("\n" + "="*70)
-    print("\nEnter URL or text to fact-check.")
-    print("Type 'exit' to quit.\n")
+    print("\n📝 Enter a claim to fact-check (or 'exit' to quit)\n")
     
     while True:
         try:
-            user_input = input("📝 Enter claim or URL: ").strip()
+            user_input = input("Claim: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nExiting...")
+            print("\n\n👋 Exiting...")
             break
         
         if not user_input:
@@ -132,115 +66,57 @@ async def main_async():
             print("Goodbye! 👋")
             break
         
-        processed_input = agent.preprocess_input(user_input)
-        logger.warning("🔍 Query received: %s", user_input[:80])
+        # Preprocess (URL extraction if needed)
+        processed_input = pipeline.preprocess_input(user_input)
         
-        print("\n⏳ Processing your request...\n")
-        
-        start_time = time.time()
+        print("\n⏳ Running ADK pipeline...\n")
+        print("─" * 70)
         
         try:
-            # ==========================================
-            # STEP 1: CHECK CACHE FIRST
-            # ==========================================
-            logger.warning("🔎 Checking memory cache...")
-            cached_claim = find_similar_cached_claim(user_input, memory)
+            # Run the ADK pipeline
+            result = await pipeline.verify_claim_async(
+                processed_input,
+                session_id=session_id
+            )
             
-            if cached_claim:
-                # Cache hit - return immediately
-                logger.warning("✅ Cache hit! Using cached result")
-                execution_time = (time.time() - start_time) * 1000
-                
-                print("─" * 70)
-                print("\n### 📊 Fact-Check Report: Cached Result\n")
-                print(f"**Status:** ✨ Retrieved from memory cache")
-                print(f"**Query:** {user_input}\n")
-                print(f"**Cached Claim:** {cached_claim['claim_text']}\n")
-                print(f"**Verdict:** {cached_claim['verdict']}\n")
-                print(f"**Confidence:** {cached_claim['confidence']:.1%}\n")
-                print(f"**Execution Time:** {execution_time:.0f}ms ⚡\n")
-                print("─" * 70 + "\n")
-                
-                final_verdict = cached_claim["verdict"]
-            
-            else:
-                # ==========================================
-                # STEP 2: RUN ADK AGENT PIPELINE
-                # ==========================================
-                logger.warning("📭 No cache hit, running ADK agent pipeline...")
-                print("─" * 70)
-                print("\n🚀 Running ADK Agent Pipeline:\n")
-                print("   Stage 1: Ingestion Agent → Processing input")
-                print("   Stage 2: Claim Extraction Agent → Identifying main claim")
-                print("   Stage 3: Verification Agent → Searching for evidence")
-                print("   Stage 4: Aggregator Agent → Processing evidence")
-                print("   Stage 5: Report Agent → Generating report\n")
-                print("─" * 70 + "\n")
-                
-                # Run the ADK agent pipeline
-                result = await agent.run_fact_check_async(processed_input)
-                
-                final_verdict = result.get("overall_verdict", "UNKNOWN")
-                execution_time = result.get("execution_time_ms", 0)
-                report = result.get("comprehensive_report", "No report generated")
-                
-                # Print the report
-                print(report)
-                
-                logger.warning("⏱️  Pipeline execution time: %.0f ms", execution_time)
-                
+            # Display results
+            if result["success"]:
+                print("\n" + result["comprehensive_report"])
                 print("\n" + "─" * 70)
-                print(f"✅ Verification Complete in {execution_time:.0f}ms\n")
+                print(f"✅ Completed in {result['execution_time_ms']:.0f}ms")
+                print(f"📊 Verdict: {result['verdict']}")
+                print(f"📈 Confidence: {result['confidence']:.1%}")
                 
-                # ==========================================
-                # STEP 3: CACHE THE RESULT
-                # ==========================================
-                if final_verdict and final_verdict != "ERROR":
-                    try:
-                        confidence = extract_confidence_from_verdict(final_verdict)
-                        agent.cache_result(
-                            claim=user_input[:500],
-                            verdict=final_verdict,
-                            confidence=confidence,
-                            evidence_count=1,
-                            session_id=session_id
-                        )
-                        logger.warning("💾 Result cached for future queries")
-                    except Exception as e:
-                        logger.warning("⚠️  Failed to cache: %s", str(e)[:100])
-            
-            # ==========================================
-            # STEP 4: LOG INTERACTION
-            # ==========================================
-            try:
+                # Cache result
+                pipeline.cache_result(
+                    claim=user_input[:500],
+                    verdict=result["verdict"],
+                    confidence=result["confidence"],
+                    session_id=session_id
+                )
+                
+                # Log interaction
                 memory.add_interaction(
                     session_id=session_id,
                     query=user_input[:200],
                     processed_input=processed_input[:500],
-                    verdict=final_verdict or "UNKNOWN"
+                    verdict=result["verdict"]
                 )
-                logger.warning("📝 Interaction logged")
-            except Exception as e:
-                logger.warning("⚠️  Failed to log: %s", str(e)[:50])
+            else:
+                print(f"\n❌ Error: {result.get('error', 'Unknown error')}")
             
-            # ==========================================
-            # STEP 5: DISPLAY STATISTICS
-            # ==========================================
-            try:
-                stats = memory.get_all_stats()
-                print(f"📊 System Statistics:")
-                print(f"   • Verified claims in memory: {stats['total_verified_claims']}")
-                print(f"   • Average confidence: {stats['average_confidence']:.1%}")
-                print(f"   • Total sessions: {stats['total_sessions']}")
-                if stats['verdict_distribution']:
-                    print(f"   • Verdicts: {stats['verdict_distribution']}")
-            except Exception as e:
-                logger.warning("⚠️  Could not display stats: %s", str(e)[:50])
+            # Display statistics
+            print("\n📊 Session Statistics:")
+            stats = memory.get_all_stats()
+            print(f"   • Total verified claims: {stats['total_verified_claims']}")
+            print(f"   • Average confidence: {stats['average_confidence']:.1%}")
+            if stats['verdict_distribution']:
+                print(f"   • Verdicts: {stats['verdict_distribution']}")
             
             print()
-        
+            
         except Exception as e:
-            logger.warning("❌ Error: %s", str(e)[:100])
+            logger.exception(f"❌ Error: {e}")
             print(f"\n❌ Error during processing: {str(e)[:200]}\n")
 
 
@@ -251,7 +127,7 @@ def main():
     except KeyboardInterrupt:
         print("\n\n👋 Shutting down...")
     except Exception as e:
-        logger.warning("❌ Fatal error: %s", str(e)[:100])
+        logger.exception(f"❌ Fatal error: {e}")
         sys.exit(1)
 
 

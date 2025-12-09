@@ -1,32 +1,38 @@
-# backend/agents/ingestion_agent.py
-"""Simple ingestion agent to accept URL or raw text and return cleaned text."""
-import requests
-from bs4 import BeautifulSoup
-from config import get_logger
+# backend/agents/ingestion_agent.py - FINAL WORKING VERSION
+"""
+Ingestion Agent - Pure ADK LlmAgent
+Processes and cleans input text for fact-checking
+"""
+from google.adk.agents import LlmAgent
+from config import ADK_MODEL_NAME, get_logger
 
 logger = get_logger(__name__)
 
-class IngestionAgent:
-    def __init__(self):
-        pass
+def create_ingestion_agent() -> LlmAgent:
+    """Create ADK LlmAgent for input processing"""
+    model = ADK_MODEL_NAME
+    
+    agent = LlmAgent(
+        name="ingestion_agent",
+        model=model,
+        instruction="""You are a content processor for fact-checking systems.
 
-    def extract_text_from_url(self, url: str) -> str:
-        """Minimal URL text extractor."""
-        logger.warning("📥 Fetching URL: %s", url[:60])
-        try:
-            r = requests.get(url, timeout=8)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
-            paragraphs = [p.get_text(strip=True) for p in soup.find_all("p")]
-            text = "\n\n".join(paragraphs)
-            logger.warning("✅ Extracted %d paragraphs", len(paragraphs))
-            return text
-        except Exception as e:
-            logger.warning("❌ Failed to extract URL: %s", str(e)[:50])
-            return ""
+Read the input_text from session state and clean it:
+1. Remove HTML artifacts and excessive whitespace
+2. Fix formatting issues
+3. Preserve all factual content
+4. Return ONLY the cleaned text
 
-    def run(self, input_text_or_url: str) -> str:
-        """If input looks like a URL, scrape; otherwise assume raw text."""
-        if input_text_or_url.strip().startswith("http"):
-            return self.extract_text_from_url(input_text_or_url)
-        return input_text_or_url
+Examples:
+- Input: "Breaking!!! Scientists say <p>climate change</p> is real!!!"
+  Output: "Scientists say climate change is real"
+  
+- Input: "The Sun sets in the east."
+  Output: "The Sun sets in the east"
+
+Return ONLY the cleaned text, nothing else.""",
+        output_key="cleaned_text"
+    )
+    
+    logger.warning("✅ Ingestion Agent created")
+    return agent

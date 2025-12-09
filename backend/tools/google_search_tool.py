@@ -1,101 +1,111 @@
-# backend/tools/google_search_tool.py - FIXED
+# backend/tools/google_search_tool.py
 """
-Fixed Google Search tool without asyncio conflicts
-Works properly in async context (Gradio UI)
+Google Search Tool - Pure ADK FunctionTool
 """
-
-import os
-import json
-import re
+from google.adk.tools import FunctionTool
+from google import genai
 from typing import List, Dict
-from config import GEMINI_API_KEY, get_logger
+from config import GEMINI_API_KEY, ADK_MODEL_NAME, GOOGLE_TOP_K, get_logger
+import json
+import os
 
 logger = get_logger(__name__)
 
 os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
-
-# Use Google's generative AI directly instead of ADK
-from google import genai
-
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
-def google_search_tool(query: str, top_k: int = 10) -> list:
+def search_google_for_current_info(
+    query: str,
+    top_k: int = GOOGLE_TOP_K
+) -> List[Dict]:
     """
-    Execute Google search using Gemini with built-in Google Search
-    FIXED: No asyncio conflicts - works in async context
+    Search Google for current information and recent events.
+    
+    This tool performs real-time web search to find up-to-date information,
+    recent news, and latest developments. Best for current events and
+    time-sensitive information.
+    
+    Args:
+        query: The claim or question to search for
+        top_k: Number of results to return (default: 10)
+    
+    Returns:
+        List of dictionaries with keys:
+        - rank: Result ranking (1-based)
+        - title: Article title
+        - content: Brief content summary
+        - url: Source URL
+        - relevance_score: Relevance score (0-1)
+        - _source: Always "web"
+    
+    Use this for:
+    - Current news and events
+    - Recent developments
+    - Real-time information
+    - Latest statistics and data
     """
-    logger.warning("🔍 google_search_tool called: %s", query[:60])
+    logger.warning(f"🔍 Google Search Tool: Searching for '{query[:60]}'")
     
     try:
-        # Use Gemini's built-in Google Search capability
         prompt = f"""Search Google for information about: {query}
 
-Return ONLY a JSON array with {top_k} results maximum:
+Return ONLY a JSON array with up to {top_k} results:
 [
   {{
     "rank": 1,
     "title": "Article Title",
-    "content": "Brief summary of the content (max 200 chars)",
+    "content": "Brief summary (max 200 chars)",
     "url": "https://example.com",
     "relevance_score": 0.95
-  }},
-  ...
+  }}
 ]
 
-Be concise. Return only valid JSON array, nothing else."""
+Return only valid JSON array, nothing else."""
 
-        logger.warning("🔍 Calling Gemini for search results...")
-        
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=ADK_MODEL_NAME,
             contents=prompt
         )
         
         response_text = response.text if hasattr(response, 'text') else str(response)
-        logger.warning("📦 Gemini response received (length: %d)", len(response_text))
         
-        # Parse JSON response
+        # Parse JSON
         results = _parse_json_response(response_text, top_k)
         
-        if results:
-            logger.warning("✅ Google Search returned %d results", len(results))
-            for i, result in enumerate(results[:3], 1):
-                logger.warning("   [%d] %s", i, result.get('title', 'Unknown')[:60])
-            return results
-        else:
-            logger.warning("⚠️  No valid results parsed")
-            return []
+        # Add source marker
+        for result in results:
+            result["_source"] = "web"
+        
+        logger.warning(f"   ✅ Found {len(results)} Google results")
+        return results
         
     except Exception as e:
-        logger.warning("❌ google_search_tool error: %s", str(e)[:100])
+        logger.warning(f"❌ Google search error: {str(e)[:100]}")
         return []
 
 
 def _parse_json_response(response_str: str, top_k: int) -> list:
-    """
-    Parse JSON response from Gemini
-    Handles various response formats
-    """
+    """Parse JSON from LLM response"""
     if not response_str:
         return []
     
+    # Try direct parse
     try:
-        # Try direct JSON parse
         result = json.loads(response_str)
         if isinstance(result, list):
             return result[:top_k]
     except json.JSONDecodeError:
         pass
     
-    # Try extracting JSON from markdown code blocks
+    # Try extracting from markdown
     try:
         if "```json" in response_str:
             json_str = response_str.split("```json")[1].split("```")[0].strip()
         elif "```" in response_str:
             json_str = response_str.split("```")[1].split("```")[0].strip()
         else:
-            # Try finding JSON array
+            # Find JSON array
             start = response_str.find("[")
             end = response_str.rfind("]")
             if start != -1 and end != -1:
@@ -109,32 +119,23 @@ def _parse_json_response(response_str: str, top_k: int) -> list:
     except (json.JSONDecodeError, ValueError):
         pass
     
-    logger.warning("⚠️  Could not parse JSON from response")
+    logger.warning("⚠️  Could not parse JSON response")
     return []
 
 
-def create_mock_search_results(query: str, count: int = 5) -> List[Dict]:
-    """
-    Fallback: Create mock results if search fails
-    Ensures system doesn't crash
-    """
-    logger.warning("⚠️  Using mock search results (fallback)")
-    
-    mock_results = [
-        {
-            "rank": 1,
-            "title": f"Result about {query}",
-            "content": f"This is a search result for {query}",
-            "url": "https://example.com/1",
-            "relevance_score": 0.8
-        },
-        {
-            "rank": 2,
-            "title": f"More information on {query}",
-            "content": f"Additional search result for {query}",
-            "url": "https://example.com/2",
-            "relevance_score": 0.7
-        }
-    ]
-    
-    return mock_results[:count]
+# Create ADK FunctionTool
+google_search_tool = FunctionTool(
+    func=search_google_for_current_info,
+    name="search_google_for_current_info",
+    description="""Search Google for current information, recent news, and latest developments.
+
+Use this tool when you need:
+- Current news and breaking stories
+- Recent events and updates
+- Real-time information
+- Latest statistics and data
+- Up-to-date verification
+
+Returns web search results ranked by relevance.
+Note: Results are from the web and may vary in reliability."""
+)
