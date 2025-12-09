@@ -1,11 +1,15 @@
-# backend/tools/faiss_tool.py
+# ==============================================================================
+# FILE 1: backend/tools/faiss_tool.py (REPLACE EXISTING)
+# ==============================================================================
+
 """
 FAISS Search Tool - Pure ADK FunctionTool
 """
 from google.adk.tools import FunctionTool
 from typing import List, Dict, Optional
-from config import FAISS_INDEX_PATH, FAISS_TOP_K, get_logger
+from config import FAISS_INDEX_PATH, TOP_K, get_logger, EMBEDDING_MODEL
 import datetime
+import os
 
 logger = get_logger(__name__)
 
@@ -25,7 +29,6 @@ def _load_faiss():
         try:
             from langchain_community.vectorstores import FAISS
             from langchain_huggingface import HuggingFaceEmbeddings
-            from config import EMBEDDING_MODEL
             
             embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
             
@@ -45,7 +48,7 @@ def _load_faiss():
 
 def search_faiss_knowledge_base(
     query: str,
-    k: int = FAISS_TOP_K
+    k: int = TOP_K
 ) -> List[Dict]:
     """
     Search FAISS knowledge base for fact-checking information.
@@ -115,18 +118,5 @@ def search_faiss_knowledge_base(
         return []
 
 
-# Create ADK FunctionTool
-faiss_search_tool = FunctionTool(
-    func=search_faiss_knowledge_base,
-    name="search_faiss_knowledge_base",
-    description="""Search the FAISS knowledge base for verified facts and historical information.
-
-Use this tool when you need:
-- Background information on topics
-- Historical facts and context
-- Established scientific knowledge
-- Previously verified claims
-
-Returns semantic search results ranked by relevance.
-Note: May contain older information. Use google_search for current events."""
-)
+# Create ADK FunctionTool (correct API)
+faiss_search_tool = FunctionTool(search_faiss_knowledge_base)

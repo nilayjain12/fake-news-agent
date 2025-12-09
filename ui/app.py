@@ -1,10 +1,11 @@
 # ui/app.py
 """
 Gradio UI for Fact-Checking Agent - Pure Google ADK
-Real-time event streaming showing agent progress
+Uses Root Orchestrator with sequential LlmAgent pipeline
 """
 import gradio as gr
 import sys
+import asyncio
 from pathlib import Path
 from datetime import datetime
 import os
@@ -14,202 +15,108 @@ BACKEND_PATH = Path(__file__).parent.parent / "backend"
 sys.path.insert(0, str(BACKEND_PATH))
 os.chdir(str(BACKEND_PATH))
 
-from agents.adk_pipeline import create_fact_check_pipeline
+from agents.root_orchestrator import root_orchestrator
 from memory.manager import MemoryManager
 from config import get_logger
 
 logger = get_logger(__name__)
 
 # Global state
-pipeline = None
 memory = None
 session_id = None
 
 
 def initialize():
-    """Initialize ADK pipeline and memory"""
-    global pipeline, memory, session_id
+    """Initialize orchestrator and memory"""
+    global memory, session_id
     
-    if pipeline is None:
+    if memory is None:
         try:
-            pipeline = create_fact_check_pipeline()
-            memory = pipeline.memory
+            memory = MemoryManager()
             session_id = f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
             memory.create_session(session_id, user_id="web-user")
-            logger.warning(f"✅ ADK Pipeline initialized: {session_id}")
+            logger.warning(f"✅ ADK Orchestrator initialized: {session_id}")
         except Exception as e:
             logger.exception(f"❌ Initialization error: {e}")
             raise
     
-    return pipeline, memory
+    return memory
 
 
-async def process_with_streaming(user_input: str, history: list):
+async def process_fact_check(user_input: str) -> str:
     """
-    Process fact-check with REAL-TIME ADK event streaming
-    Shows each agent's progress as it happens
+    Process fact-check using ADK Root Orchestrator
+    Returns the comprehensive report
     """
-    pipeline_instance, memory_instance = initialize()
+    memory_instance = initialize()
     
     if not user_input.strip():
-        yield history, ""
-        return
-    
-    # Add user message
-    history.append([user_input, "🔄 Starting ADK pipeline..."])
-    yield history, ""
-    
-    thinking_steps = []
+        return "Please enter a claim to verify."
     
     try:
-        # Preprocess input
-        processed_input = pipeline_instance.preprocess_input(user_input)
+        logger.warning("🔍 Query received: %s", user_input[:80])
         
-        # Agent emojis for visualization
-        agent_emojis = {
-            "ingestion_agent": "📥",
-            "claim_extraction_agent": "🎯",
-            "evidence_retrieval_agent": "🔍",
-            "verification_agent": "✅",
-            "aggregator_agent": "⚖️",
-            "report_agent": "📝"
-        }
+        # Run the ADK pipeline
+        result = await root_orchestrator.run_pipeline(
+            input_text=user_input,
+            user_id="web-user",
+            session_id=session_id
+        )
         
-        # Stream ADK events
-        async for event_data in pipeline_instance.stream_events(processed_input, session_id):
-            event_type = event_data.get("type")
+        if result["success"]:
+            report = result.get("report", "")
+            execution_time = result.get("execution_time_ms", 0)
             
-            if event_type == "agent_start":
-                # New agent started
-                agent_name = event_data.get("agent_name", "")
-                emoji = agent_emojis.get(agent_name, "🔧")
-                
-                thinking_steps.append((
-                    f"{emoji} {agent_name.replace('_', ' ').title()}",
-                    "Starting..."
-                ))
-                
-                # Update UI
-                progress_html = format_thinking_live(thinking_steps)
-                history[-1][1] = f"🧠 **Agent Progress:**\n\n{progress_html}"
-                yield history, ""
-            
-            elif event_type == "agent_event":
-                # Agent progress update
-                text = event_data.get("text", "")
-                
-                if thinking_steps:
-                    step_name, _ = thinking_steps[-1]
-                    thinking_steps[-1] = (step_name, text[:200])
-                
-                progress_html = format_thinking_live(thinking_steps)
-                history[-1][1] = f"🧠 **Agent Progress:**\n\n{progress_html}"
-                yield history, ""
-            
-            elif event_type == "agent_complete":
-                # Agent finished
-                if thinking_steps:
-                    step_name, details = thinking_steps[-1]
-                    thinking_steps[-1] = (step_name, f"✅ {details}")
-                
-                progress_html = format_thinking_live(thinking_steps)
-                history[-1][1] = f"🧠 **Agent Progress:**\n\n{progress_html}"
-                yield history, ""
-            
-            elif event_type == "final_result":
-                # Pipeline complete
-                result = event_data.get("result", {})
-                
-                final_report = result.get("comprehensive_report", "")
-                verdict = result.get("verdict", "UNKNOWN")
-                confidence = result.get("confidence", 0.5)
-                
-                thinking_steps.append((
-                    "✅ Verification Complete!",
-                    f"Verdict: {verdict} ({confidence:.1%} confidence)"
-                ))
-                
-                # Format final response
-                thinking_html = format_thinking_live(thinking_steps)
-                
-                final_response = f"""<details open style="margin: 15px 0; padding: 15px; border: 2px solid #667eea; border-radius: 8px; background-color: #002B57;">
-<summary style="cursor: pointer; font-weight: bold; color: #667eea; font-size: 16px;">🧠 Agent Thinking Process</summary>
-
-{thinking_html}
-
-</details>
+            # Format response with timing and API calls
+            api_calls = result.get("api_calls", 0)
+            response = f"""{report}
 
 ---
 
-{final_report}
-"""
-                
-                history[-1][1] = final_response
-                yield history, ""
-                
-                # Cache result
-                if verdict and verdict != "ERROR":
-                    try:
-                        pipeline_instance.cache_result(
-                            claim=user_input[:500],
-                            verdict=verdict,
-                            confidence=confidence,
-                            session_id=session_id
-                        )
-                    except Exception as e:
-                        logger.warning(f"⚠️  Caching failed: {str(e)}")
-                
-                # Log interaction
-                try:
-                    memory_instance.add_interaction(
-                        session_id=session_id,
-                        query=user_input[:200],
-                        processed_input=processed_input[:500],
-                        verdict=verdict
-                    )
-                except Exception as e:
-                    logger.warning(f"⚠️  Logging failed: {str(e)}")
+⏱️ **Execution Time:** {execution_time:.0f}ms  
+📊 **API Calls:** {api_calls}/2 (Optimized Pipeline)"""
             
-            elif event_type == "error":
-                error_msg = event_data.get("error", "Unknown error")
-                history[-1][1] = f"❌ Error: {error_msg}"
-                yield history, ""
+            # Cache result if verdict exists
+            verdict = result.get("verdict", "")
+            if verdict and verdict != "ERROR":
+                try:
+                    memory_instance.cache_verdict(
+                        claim=user_input[:500],
+                        verdict=verdict,
+                        confidence=0.7,
+                        evidence_count=1,
+                        session_id=session_id
+                    )
+                    logger.warning("💾 Result cached")
+                except Exception as e:
+                    logger.warning("⚠️ Caching failed: %s", str(e)[:50])
+            
+            # Log interaction
+            try:
+                memory_instance.add_interaction(
+                    session_id=session_id,
+                    query=user_input[:200],
+                    processed_input=user_input[:500],
+                    verdict=verdict or "UNKNOWN"
+                )
+                logger.warning("📝 Interaction logged")
+            except Exception as e:
+                logger.warning("⚠️ Logging failed: %s", str(e)[:50])
+            
+            return response
+        else:
+            error = result.get("error", "Unknown error")
+            return f"❌ **Error:** {error}"
     
     except Exception as e:
-        logger.exception(f"❌ Processing error: {e}")
-        history[-1][1] = f"❌ Error: {str(e)[:200]}"
-        yield history, ""
-
-
-def format_thinking_live(steps: list) -> str:
-    """Format thinking steps as HTML"""
-    if not steps:
-        return "<p>No steps yet...</p>"
-    
-    html = '<div style="font-family: monospace; line-height: 1.8;">'
-    
-    for i, (step_name, details) in enumerate(steps, 1):
-        is_complete = "✅" in details or "✅" in step_name
-        
-        color = "#2ecc71" if is_complete else "#667eea"
-        icon = "✅" if is_complete else "🔄"
-        
-        html += f"""
-<div style="margin: 10px 0; padding: 12px; background-color: #002B57; border-left: 4px solid {color}; border-radius: 5px;">
-    <strong style="color: {color};">{icon} {step_name}</strong><br>
-    <span style="color: #a0aec0; margin-left: 20px;">{details}</span>
-</div>
-"""
-    
-    html += '</div>'
-    return html
+        logger.exception("❌ Processing error: %s", e)
+        return f"❌ **Error:** {str(e)[:200]}"
 
 
 def get_stats() -> str:
     """Get system statistics"""
     try:
-        _, memory_instance = initialize()
-        
+        memory_instance = initialize()
         stats = memory_instance.get_all_stats()
         
         stats_text = f"""### 📊 System Statistics
@@ -229,8 +136,30 @@ def get_stats() -> str:
         return f"Could not load statistics: {str(e)}"
 
 
+def chat_interface(message: str, history: list):
+    """Chat interface that handles async execution"""
+    if not message.strip():
+        return history, ""
+    
+    # Add user message
+    history.append([message, "⏳ Processing..."])
+    
+    try:
+        # Run async pipeline
+        result = asyncio.run(process_fact_check(message))
+        
+        # Update with result
+        history[-1][1] = result
+        
+    except Exception as e:
+        logger.exception(f"❌ Chat error: {e}")
+        history[-1][1] = f"❌ Error: {str(e)[:200]}"
+    
+    return history, ""
+
+
 def create_interface():
-    """Create Gradio interface with ADK streaming"""
+    """Create Gradio interface"""
     
     initialize()
     
@@ -251,17 +180,35 @@ def create_interface():
             color: #667eea;
             font-size: 16px;
         }
+        .verdict-true {
+            background-color: #2ecc71;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .verdict-false {
+            background-color: #e74c3c;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .verdict-inconclusive {
+            background-color: #f39c12;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
         """
     ) as demo:
         
         gr.Markdown("""
         # 🔍 Fact-Check Agent (Pure Google ADK)
         
-        **100% ADK Implementation** - Watch agents work in real-time!
+        **Sequential ADK Pipeline** - 5 LLM Agents in Sequence
         
-        - 🎯 **6 ADK Agents** - SequentialAgent pipeline
-        - 🔧 **ADK Tools** - FAISS + Google Search as FunctionTools
-        - 🧠 **Live Progress** - Real-time event streaming
+        - 🎯 **5 ADK LlmAgents** - Ingestion → Extraction → Verification → Aggregation → Report
+        - 🔧 **ADK Tools** - FAISS + Google Search as FunctionTools  
+        - 📊 **Real-time Processing** - Sequential async execution
         - 💾 **Memory Caching** - Instant results for repeated queries
         """)
         
@@ -285,92 +232,124 @@ def create_interface():
                         )
                         submit_btn = gr.Button("🔍 Verify", scale=1, size="lg")
                     
-                    clear_btn = gr.Button("🗑️ Clear")
+                    with gr.Row():
+                        clear_btn = gr.Button("🗑️ Clear History", scale=1)
+                        example_btn = gr.Button("📝 Try Example", scale=1)
                     
-                    # Wire up streaming
+                    # Wire up interactions
                     submit_btn.click(
-                        process_with_streaming,
+                        chat_interface,
                         inputs=[msg, chatbot],
                         outputs=[chatbot, msg]
                     )
                     
                     msg.submit(
-                        process_with_streaming,
+                        chat_interface,
                         inputs=[msg, chatbot],
                         outputs=[chatbot, msg]
                     )
                     
                     clear_btn.click(lambda: [], outputs=chatbot)
+                    
+                    def load_example():
+                        examples = [
+                            "The Earth revolves around the Sun.",
+                            "Water boils at 100 degrees Celsius at sea level.",
+                            "The Great Wall of China is visible from space with the naked eye.",
+                            "Vitamin C prevents the common cold.",
+                        ]
+                        import random
+                        return random.choice(examples)
+                    
+                    example_btn.click(load_example, outputs=msg)
                 
                 with gr.Column(scale=1):
                     gr.Markdown("### 📊 Statistics")
                     stats_output = gr.Markdown()
-                    refresh_btn = gr.Button("🔄 Refresh")
+                    refresh_btn = gr.Button("🔄 Refresh", scale=1)
                     refresh_btn.click(get_stats, outputs=stats_output)
                     demo.load(get_stats, outputs=stats_output)
                     
                     gr.Markdown("""
                     ### ✨ ADK Pipeline
                     
-                    **Agents:**
+                    **5 Sequential Agents:**
                     1. 📥 Ingestion
-                    2. 🎯 Claim Extraction
-                    3. 🔍 Evidence Retrieval
-                    4. ✅ Verification
-                    5. ⚖️ Aggregation
-                    6. 📝 Report Generation
+                    2. 🎯 Extraction
+                    3. 🔍 Verification
+                    4. ⚖️ Aggregation
+                    5. 📄 Report
                     
                     **Tools:**
                     - FAISS Knowledge Base
                     - Google Search
                     
                     **Features:**
-                    - Event streaming
+                    - Sequential execution
                     - Session management
                     - Memory caching
+                    - Async processing
                     """)
         
         with gr.Tab("ℹ️ About"):
             gr.Markdown("""
             ## About This System
             
-            This is a **100% Google ADK implementation** of a fact-checking agent.
+            This is a **Pure Google ADK implementation** of a fact-checking agent system.
             
             ### Architecture
             
-            **Main Pipeline:** `SequentialAgent`
-            - Orchestrates 6 agents in sequence
-            - Automatic data flow via `session.state`
-            - Event-driven execution
+            **Root Orchestrator** (`root_orchestrator.py`)
+            - Coordinates 5 LlmAgent sub-agents
+            - Sequential execution via async/await
+            - Uses Google ADK `Runner` + `InMemorySessionService`
             
-            **Agents:**
-            1. **IngestionAgent** (`LlmAgent`) - Cleans input text
-            2. **ClaimExtractionAgent** (`LlmAgent`) - Extracts main claim
-            3. **EvidenceRetrievalAgent** (`BaseAgent`) - Parallel retrieval
-            4. **VerificationAgent** (`LlmAgent`) - Evaluates evidence
-            5. **AggregatorAgent** (`LlmAgent`) - Generates verdict
-            6. **ReportAgent** (`LlmAgent`) - Creates comprehensive report
+            **5 Sequential Agents (All LlmAgent):**
+            1. **IngestionAgent** - Cleans input text or extracts from URLs
+            2. **ExtractionAgent** - Extracts main verifiable claim
+            3. **VerificationAgent** - Searches FAISS + Google for evidence
+            4. **AggregationAgent** - Counts evidence and generates verdict
+            5. **ReportAgent** - Creates comprehensive fact-check report
             
-            **Tools:**
-            - `search_faiss_knowledge_base` (`FunctionTool`)
-            - `search_google_for_current_info` (`FunctionTool`)
+            **Tools (FunctionTool):**
+            - `extract_url_content()` - Web scraping
+            - `validate_and_clean_text()` - Text cleaning
+            - `extract_main_claim()` - LLM-based claim extraction
+            - `search_faiss_knowledge_base()` - Semantic search
+            - `search_google()` - Real-time web search
+            - `evaluate_evidence()` - Evidence classification
+            - `count_evidence()` - Evidence counting
+            - `generate_verdict()` - Verdict generation
+            - `format_report()` - Report formatting
             
-            ### ADK Benefits
+            ### Technology Stack
             
-            ✅ **Modular** - Each agent has one clear responsibility  
-            ✅ **Transparent** - See agent thinking in real-time  
-            ✅ **Maintainable** - Easy to modify and extend  
-            ✅ **Production-Ready** - Built-in error handling  
-            ✅ **Scalable** - Add agents without refactoring  
-            
-            ### Technology
-            
-            - **Google ADK** - Agent orchestration framework
-            - **Gemini 2.5 Flash** - LLM for reasoning
-            - **FAISS** - Semantic knowledge base
+            - **Google ADK** - Agent orchestration
+            - **Gemini 2.5 Flash** - LLM reasoning
+            - **FAISS** - Semantic knowledge base search
             - **Google Search** - Real-time verification
-            - **SQLite** - Memory caching
+            - **SQLite** - Session & memory caching
             - **Gradio** - Web interface
+            
+            ### How It Works
+            
+            1. **User Input** → Ingestion Agent (cleans text)
+            2. **Clean Text** → Extraction Agent (extracts claim)
+            3. **Claim** → Verification Agent (searches evidence)
+            4. **Evidence** → Aggregation Agent (generates verdict)
+            5. **Verdict** → Report Agent (creates report)
+            6. **Report** → User sees comprehensive fact-check result
+            
+            ### Benefits of ADK
+            
+            ✅ **Modular** - Each agent has clear responsibility  
+            ✅ **Transparent** - See agent progression  
+            ✅ **Maintainable** - Easy to modify agents  
+            ✅ **Production-Ready** - Built-in error handling  
+            ✅ **Scalable** - Add/remove agents easily  
+            ✅ **Native Tools** - Google ADK FunctionTools  
+            ✅ **Session Management** - Built-in InMemorySessionService  
+            ✅ **Async-Ready** - Full asyncio integration  
             """)
     
     return demo
@@ -380,6 +359,8 @@ def main():
     """Main entry point"""
     try:
         print("🚀 Starting Fact-Check Agent (Pure ADK)...")
+        print("📍 Opening at http://0.0.0.0:8000")
+        
         demo = create_interface()
         
         demo.launch(

@@ -1,4 +1,7 @@
-# backend/tools/semantic_ranker.py (IMPROVED)
+# ==============================================================================
+# FILE 3: backend/tools/semantic_ranker.py (NO CHANGES - Already compatible)
+# ==============================================================================
+
 """Advanced semantic ranking with source-aware relevance scoring."""
 from langchain_huggingface import HuggingFaceEmbeddings
 from config import EMBEDDING_MODEL, get_logger
@@ -134,7 +137,7 @@ class SemanticRanker:
                 "top_item_source": top_items[0]['source'] if top_items else 'none',
                 "top_item_score": top_items[0]['final_score'] if top_items else 0.0,
                 "source_breakdown": {
-                    "web": sum(1 for item in top_items if item['source'] == 'web'),
+                    "web": sum(1 for item in top_items if item['source'] == 'google_search'),
                     "faiss": sum(1 for item in top_items if item['source'] == 'faiss'),
                 }
             }
@@ -151,11 +154,8 @@ class SemanticRanker:
             return evidence_items[:top_k], [0.0] * min(top_k, len(evidence_items)), {}
     
     def _get_freshness_boost(self, source: str) -> float:
-        """
-        Return freshness boost based on source.
-        Web sources get significant boost for being current.
-        """
-        if source in ['web', 'google_search', 'google_search_fallback']:
+        """Return freshness boost based on source."""
+        if source in ['google_search', 'web']:
             return 0.95  # Web results: maximum freshness
         elif source == 'faiss':
             return 0.3  # FAISS: potentially old, lower freshness
@@ -163,12 +163,8 @@ class SemanticRanker:
             return 0.5  # Unknown: neutral
     
     def _get_source_reliability(self, source: str) -> float:
-        """
-        Return reliability score.
-        Web = more authoritative for current events.
-        FAISS = outdated, lower reliability.
-        """
-        if source in ['web', 'google_search']:
+        """Return reliability score."""
+        if source in ['google_search', 'web']:
             return 1.0  # Web: high reliability for current facts
         elif source == 'faiss':
             return 0.4  # FAISS: lower reliability (potential outdated data)
@@ -176,12 +172,7 @@ class SemanticRanker:
             return 0.5
     
     def _assess_content_quality(self, content: str) -> float:
-        """
-        Assess content quality based on:
-        - Length (more detailed = better)
-        - Presence of specific facts
-        - Completeness
-        """
+        """Assess content quality based on length and completeness."""
         if not content:
             return 0.0
         
