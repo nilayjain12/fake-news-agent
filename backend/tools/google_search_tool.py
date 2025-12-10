@@ -1,131 +1,164 @@
 # ==============================================================================
-# FILE 2: backend/tools/google_search_tool.py (REPLACE EXISTING)
+# FILE 2: backend/tools/google_search_tool.py (ADK + Google Search Tool - FINAL)
 # ==============================================================================
 
 """
-Google Search Tool - Pure ADK FunctionTool using Gemini
+Google Search Tool - ADK Agent using built-in google_search tool
+✅ Fully async, safe for Gradio, FastAPI, and ADK pipelines
+✅ No event-loop crashes
+✅ Output format preserved
 """
-from google.adk.tools import FunctionTool
-from google import genai
-from config import GEMINI_API_KEY, ADK_MODEL_NAME, get_logger
-from typing import List, Dict
+
 import json
-import os
+from typing import List, Dict
+
+from google.adk.agents import LlmAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.adk.tools import google_search
+from google.genai import types
+
+from config import ADK_MODEL_NAME, get_logger
 
 logger = get_logger(__name__)
 
-os.environ['GOOGLE_API_KEY'] = GEMINI_API_KEY
-client = genai.Client(api_key=GEMINI_API_KEY)
+APP_NAME = "google_search_agent_app"
+USER_ID = "google_search_user"
+SESSION_ID = "google_search_session"
 
 
-def search_google(
-    query: str,
-    top_k: int = 10
-) -> List[Dict]:
+# ------------------------------------------------------------------------------
+# ✅ ADK GOOGLE SEARCH AGENT
+# ------------------------------------------------------------------------------
+google_search_agent = LlmAgent(
+    model=ADK_MODEL_NAME,
+    name="google_search_agent",
+    description="Agent that uses Google Search to fetch real-time factual information.",
+    instruction=(
+        "You are a web search agent.\n"
+        "You MUST use the google_search tool.\n\n"
+        "You MUST return STRICTLY VALID JSON.\n"
+        "If you cannot find evidence, return this EXACT output:\n"
+        "[]\n\n"
+        "Never return text outside JSON.\n"
+        "Never include explanations.\n"
+        "Never include markdown.\n\n"
+        "Output format:\n"
+        "[\n"
+        "  {\n"
+        "    \"rank\": 1,\n"
+        "    \"title\": \"Article Title\",\n"
+        "    \"content\": \"Brief summary (max 200 chars)\",\n"
+        "    \"url\": \"https://example.com\",\n"
+        "    \"relevance_score\": 0.95\n"
+        "  }\n"
+        "]"
+    ),
+    tools=[google_search],
+)
+
+
+# ------------------------------------------------------------------------------
+# ✅ ASYNC SEARCH FUNCTION (THIS IS NOW THE REAL TOOL)
+# ------------------------------------------------------------------------------
+async def search_google(query: str, top_k: int = 10) -> List[Dict]:
     """
-    Search Google for current information using Gemini.
-    
-    This tool performs real-time web searches to find current news,
-    recent events, and up-to-date information. Use this for verifying
-    claims about recent events or breaking news.
-    
-    Args:
-        query: The claim or question to search for
-        top_k: Maximum number of results to return (default: 10)
-    
-    Returns:
-        List of search results with keys:
-        - rank: Result ranking (1-based)
-        - title: Result title
-        - content: Brief summary or snippet
-        - url: Source URL
-        - relevance_score: Relevance score (0-1)
-        - _source: Always "google_search"
-    
-    Note: Uses Gemini's built-in Google Search capability for accurate results.
+    ✅ Async Google search using ADK agent
+    ✅ REQUIRED for Gradio / FastAPI / ADK
+    ✅ Output format unchanged
     """
-    logger.warning(f"🔍 Google Search Tool: Searching for '{query[:60]}'")
-    
+    logger.warning(f"🔍 Google Search Agent: Searching for '{query[:60]}'")
+
     try:
-        prompt = f"""Search Google for information about: {query}
+        session_service = InMemorySessionService()
 
-Return ONLY a JSON array with {top_k} results maximum:
-[
-  {{
-    "rank": 1,
-    "title": "Article Title",
-    "content": "Brief summary (max 200 chars)",
-    "url": "https://example.com",
-    "relevance_score": 0.95
-  }}
-]
-
-Be concise. Return ONLY valid JSON array, nothing else."""
-
-        logger.warning("   📡 Calling Gemini with Google Search...")
-        
-        response = client.models.generate_content(
-            model=ADK_MODEL_NAME,
-            contents=prompt
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id=USER_ID,
+            session_id=SESSION_ID,
         )
-        
-        response_text = response.text if hasattr(response, 'text') else str(response)
-        logger.warning("   📦 Response received")
-        
-        # Parse JSON response
-        results = _parse_json_response(response_text, top_k)
-        
+
+        runner = Runner(
+            agent=google_search_agent,
+            app_name=APP_NAME,
+            session_service=session_service,
+        )
+
+        content = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    text=(
+                        f"Search for: {query}. "
+                        f"Return at most {top_k} results using the exact schema."
+                    )
+                )
+            ],
+        )
+
+        events = runner.run_async(
+            user_id=USER_ID,
+            session_id=SESSION_ID,
+            new_message=content,
+        )
+
+        final_text = ""
+
+        async for event in events:
+            if event.is_final_response() and event.content and event.content.parts:
+                part = event.content.parts[0]
+                if getattr(part, "text", None):
+                    final_text = part.text.strip()
+
+        results = _parse_json_response(final_text, top_k)
+
         if results:
-            logger.warning(f"   ✅ Found {len(results)} web results")
             for result in results:
                 result["_source"] = "google_search"
+
+            logger.warning(f"   ✅ Parsed {len(results)} results")
             return results
-        else:
-            logger.warning("   ⚠️  No valid results parsed")
-            return []
-        
+
+        logger.warning("   ⚠️  No valid JSON returned")
+        return []
+
     except Exception as e:
-        logger.warning(f"❌ Google Search error: {str(e)[:100]}")
+        logger.warning(f"❌ Google Search Agent error: {str(e)[:300]}")
         return []
 
 
+# ------------------------------------------------------------------------------
+# ✅ JSON PARSER (UNCHANGED)
+# ------------------------------------------------------------------------------
 def _parse_json_response(response_str: str, top_k: int) -> List[Dict]:
-    """Parse JSON response from Gemini"""
     if not response_str:
         return []
-    
+
     try:
-        # Try direct JSON parse
         result = json.loads(response_str)
         if isinstance(result, list):
             return result[:top_k]
     except json.JSONDecodeError:
         pass
-    
-    # Try extracting JSON from markdown code blocks
+
     try:
         if "```json" in response_str:
-            json_str = response_str.split("```json")[1].split("```")[0].strip()
+            json_str = response_str.split("```json", 1)[1].split("```", 1)[0].strip()
         elif "```" in response_str:
-            json_str = response_str.split("```")[1].split("```")[0].strip()
+            json_str = response_str.split("```", 1)[1].split("```", 1)[0].strip()
         else:
-            # Try finding JSON array
             start = response_str.find("[")
             end = response_str.rfind("]")
             if start != -1 and end != -1:
-                json_str = response_str[start:end+1]
+                json_str = response_str[start : end + 1]
             else:
                 return []
-        
+
         result = json.loads(json_str)
         if isinstance(result, list):
             return result[:top_k]
     except (json.JSONDecodeError, ValueError):
         pass
-    
-    logger.warning("   ⚠️  Could not parse JSON from response")
+
+    logger.warning("   ⚠️  Could not parse JSON from agent response")
     return []
-
-
-# Create ADK FunctionTool (correct API)
-google_search_tool = FunctionTool(search_google)

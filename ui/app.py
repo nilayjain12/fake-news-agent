@@ -1,8 +1,12 @@
-# ui/app.py
+# ui/app.py (IMPROVED - Better Formatting & Context)
 """
-Gradio UI for Fact-Checking Agent - Pure Google ADK
-Uses Root Orchestrator with sequential LlmAgent pipeline
+Improved UI with:
+- Clear verdict display (category first, then reasoning)
+- Conversation memory tracking
+- Smart query routing
+- Better response formatting
 """
+
 import gradio as gr
 import sys
 import asyncio
@@ -10,7 +14,6 @@ from pathlib import Path
 from datetime import datetime
 import os
 
-# Setup paths
 BACKEND_PATH = Path(__file__).parent.parent / "backend"
 sys.path.insert(0, str(BACKEND_PATH))
 os.chdir(str(BACKEND_PATH))
@@ -21,13 +24,12 @@ from config import get_logger
 
 logger = get_logger(__name__)
 
-# Global state
 memory = None
 session_id = None
 
 
 def initialize():
-    """Initialize orchestrator and memory"""
+    """Initialize on startup"""
     global memory, session_id
     
     if memory is None:
@@ -35,127 +37,173 @@ def initialize():
             memory = MemoryManager()
             session_id = f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
             memory.create_session(session_id, user_id="web-user")
-            logger.warning(f"✅ ADK Orchestrator initialized: {session_id}")
+            logger.warning(f"✅ Improved Orchestrator initialized: {session_id}")
         except Exception as e:
-            logger.exception(f"❌ Initialization error: {e}")
+            logger.exception(f"❌ Init error: {e}")
             raise
     
-    return memory
+    return memory, session_id
+
+
+def format_response(result: dict) -> str:
+    """Format result with clear verdict display"""
+    
+    if not result.get("success"):
+        error = result.get("error", "Unknown error")
+        return f"❌ **Error**\n\n{error}"
+    
+    # ===== CASUAL CHAT =====
+    if result.get("is_casual_chat"):
+        response = result.get("response", "")
+        execution = result.get("execution_time_ms", 0)
+        return f"{response}\n\n---\n⏱️ Response: {execution:.0f}ms"
+    
+    # ===== FOLLOW-UP =====
+    if result.get("is_follow_up"):
+        claim = result.get("claim", "Previous claim")
+        reasoning = result.get("reasoning", "")
+        verdict = result.get("verdict", "UNKNOWN")
+        confidence = result.get("confidence", 0)
+        execution = result.get("execution_time_ms", 0)
+        
+        return f"""## Regarding: {claim[:80]}...
+
+**Previous Verdict:** {verdict} ({confidence:.0%})
+
+{reasoning}
+
+---
+⏱️ Response Time: {execution:.0f}ms
+📊 API Calls: 0 (Context-aware response)"""
+    
+    # ===== NEW CLAIM FACT-CHECK =====
+    claim = result.get("claim", "Unknown claim")
+    verdict = result.get("verdict", "INCONCLUSIVE").upper()
+    confidence = result.get("confidence", 0)
+    reasoning = result.get("reasoning", "")
+    evidence_count = result.get("evidence_count", 0)
+    execution = result.get("execution_time_ms", 0)
+    from_cache = result.get("from_cache", False)
+    api_calls = result.get("api_calls", 0)
+    
+    # Format verdict with icon and category name
+    verdict_icons = {
+        "TRUE": "✅",
+        "FALSE": "❌",
+        "INCONCLUSIVE": "❓"
+    }
+    
+    verdict_names = {
+        "TRUE": "LIKELY TRUE",
+        "FALSE": "LIKELY FALSE",
+        "INCONCLUSIVE": "CANNOT BE DETERMINED"
+    }
+    
+    icon = verdict_icons.get(verdict, "❓")
+    name = verdict_names.get(verdict, "UNKNOWN")
+    
+    response = f"""## Fact-Check Result
+
+### Verdict Category
+**{icon} {name}**
+Confidence: {confidence:.0%}
+
+### Claim
+> {claim}
+
+### Reasoning
+{reasoning}
+
+---
+⏱️ Execution Time: {execution:.0f}ms
+📊 API Calls: {api_calls}/20
+📚 Evidence Reviewed: {evidence_count} sources
+{"💾 From Cache (Instant)" if from_cache else "🔍 Fresh Fact-Check"}"""
+    
+    return response
 
 
 async def process_fact_check(user_input: str) -> str:
-    """
-    Process fact-check using ADK Root Orchestrator
-    Returns the comprehensive report
-    """
-    memory_instance = initialize()
+    """Process query using improved orchestrator"""
+    
+    memory_inst, session = initialize()
     
     if not user_input.strip():
-        return "Please enter a claim to verify."
+        return "Please enter a claim or question."
     
     try:
-        logger.warning("🔍 Query received: %s", user_input[:80])
+        logger.warning("🔍 Processing: %s", user_input[:80])
         
-        # Run the ADK pipeline
-        result = await root_orchestrator.run_pipeline(
-            input_text=user_input,
-            user_id="web-user",
-            session_id=session_id
+        # Run improved orchestrator
+        result = await root_orchestrator.process_query(
+            user_input=user_input,
+            session_id=session
         )
         
-        if result["success"]:
-            report = result.get("report", "")
-            execution_time = result.get("execution_time_ms", 0)
-            
-            # Format response with timing and API calls
-            api_calls = result.get("api_calls", 0)
-            response = f"""{report}
-
----
-
-⏱️ **Execution Time:** {execution_time:.0f}ms  
-📊 **API Calls:** {api_calls}/2 (Optimized Pipeline)"""
-            
-            # Cache result if verdict exists
-            verdict = result.get("verdict", "")
-            if verdict and verdict != "ERROR":
-                try:
-                    memory_instance.cache_verdict(
-                        claim=user_input[:500],
-                        verdict=verdict,
-                        confidence=0.7,
-                        evidence_count=1,
-                        session_id=session_id
-                    )
-                    logger.warning("💾 Result cached")
-                except Exception as e:
-                    logger.warning("⚠️ Caching failed: %s", str(e)[:50])
-            
-            # Log interaction
-            try:
-                memory_instance.add_interaction(
-                    session_id=session_id,
-                    query=user_input[:200],
-                    processed_input=user_input[:500],
-                    verdict=verdict or "UNKNOWN"
-                )
-                logger.warning("📝 Interaction logged")
-            except Exception as e:
-                logger.warning("⚠️ Logging failed: %s", str(e)[:50])
-            
-            return response
-        else:
-            error = result.get("error", "Unknown error")
-            return f"❌ **Error:** {error}"
+        # Format and return response
+        return format_response(result)
     
     except Exception as e:
-        logger.exception("❌ Processing error: %s", e)
-        return f"❌ **Error:** {str(e)[:200]}"
+        logger.exception(f"❌ Error: {e}")
+        return f"❌ **Error**\n\n{str(e)[:200]}"
+
+
+def chat_interface(message: str, history: list):
+    """Chat interface with conversation tracking"""
+    
+    if not message.strip():
+        return history, ""
+    
+    # Add user message to history
+    history.append({"role": "user", "content": message})
+    
+    try:
+        # Process message
+        result = asyncio.run(process_fact_check(message))
+        
+        # Add bot response to history
+        history.append({"role": "assistant", "content": result})
+        
+    except Exception as e:
+        logger.exception(f"❌ Chat error: {e}")
+        history.append({"role": "assistant", "content": f"❌ Error: {str(e)[:200]}"})
+    
+    return history, ""
 
 
 def get_stats() -> str:
     """Get system statistics"""
     try:
-        memory_instance = initialize()
-        stats = memory_instance.get_all_stats()
+        memory_inst, session = initialize()
+        stats = memory_inst.get_all_stats()
+        
+        orch_stats = root_orchestrator.get_stats() if hasattr(root_orchestrator, 'get_stats') else {
+            "api_calls": root_orchestrator.api_calls,
+            "cache_hits": root_orchestrator.cache_hits
+        }
         
         stats_text = f"""### 📊 System Statistics
 
-**Total Verified Claims:** {stats['total_verified_claims']}
+**Fact-Checks Performed:** {stats['total_verified_claims']}
 **Average Confidence:** {stats['average_confidence']:.1%}
-**Total Sessions:** {stats['total_sessions']}
+**Sessions:** {stats['total_sessions']}
 
 **Verdict Distribution:**"""
         
         if stats['verdict_distribution']:
             for verdict, count in stats['verdict_distribution'].items():
-                stats_text += f"\n- **{verdict}:** {count}"
+                stats_text += f"\n- {verdict}: {count}"
+        
+        stats_text += f"""
+
+**Current Session:**
+- Cache Hits: {orch_stats['cache_hits']}
+- API Calls Used: {orch_stats['api_calls']}/20
+- Remaining: {20 - orch_stats['api_calls']}/20"""
         
         return stats_text
     except Exception as e:
-        return f"Could not load statistics: {str(e)}"
-
-
-def chat_interface(message: str, history: list):
-    """Chat interface that handles async execution"""
-    if not message.strip():
-        return history, ""
-    
-    # Add user message
-    history.append([message, "⏳ Processing..."])
-    
-    try:
-        # Run async pipeline
-        result = asyncio.run(process_fact_check(message))
-        
-        # Update with result
-        history[-1][1] = result
-        
-    except Exception as e:
-        logger.exception(f"❌ Chat error: {e}")
-        history[-1][1] = f"❌ Error: {str(e)[:200]}"
-    
-    return history, ""
+        return f"Could not load stats: {str(e)}"
 
 
 def create_interface():
@@ -164,79 +212,52 @@ def create_interface():
     initialize()
     
     with gr.Blocks(
-        title="Fact-Check Agent (Pure ADK)",
+        title="Fact-Check Agent",
         theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="purple"),
         css="""
-        details {
-            margin: 15px 0;
+        .verdict-container {
+            border-left: 4px solid #667eea;
             padding: 15px;
-            border: 2px solid #667eea;
-            border-radius: 8px;
-            background-color: #002B57;
-        }
-        summary {
-            cursor: pointer;
-            font-weight: bold;
-            color: #667eea;
-            font-size: 16px;
-        }
-        .verdict-true {
-            background-color: #2ecc71;
-            color: white;
-            padding: 10px;
-            border-radius: 5px;
-        }
-        .verdict-false {
-            background-color: #e74c3c;
-            color: white;
-            padding: 10px;
-            border-radius: 5px;
-        }
-        .verdict-inconclusive {
-            background-color: #f39c12;
-            color: white;
-            padding: 10px;
+            margin: 10px 0;
             border-radius: 5px;
         }
         """
     ) as demo:
         
         gr.Markdown("""
-        # 🔍 Fact-Check Agent (Pure Google ADK)
+        # 🔍 Smart Fact-Check Agent
         
-        **Sequential ADK Pipeline** - 5 LLM Agents in Sequence
+        **Context-Aware Verification with Conversation Memory**
         
-        - 🎯 **5 ADK LlmAgents** - Ingestion → Extraction → Verification → Aggregation → Report
-        - 🔧 **ADK Tools** - FAISS + Google Search as FunctionTools  
-        - 📊 **Real-time Processing** - Sequential async execution
-        - 💾 **Memory Caching** - Instant results for repeated queries
+        - ✅ **Clear Verdicts** - Category + Confidence + Reasoning
+        - 💬 **Conversation Memory** - Understands follow-ups
+        - 🎯 **Smart Routing** - New claims vs follow-ups vs chat
+        - ⚡ **Efficient** - 2 API calls for facts, 0 for follow-ups
         """)
         
-        with gr.Tab("💬 Verify Claims"):
+        with gr.Tab("💬 Fact-Check"):
             with gr.Row():
                 with gr.Column(scale=3):
-                    gr.Markdown("### 💬 Enter Claim to Verify")
+                    gr.Markdown("### Ask & Verify")
                     
                     chatbot = gr.Chatbot(
-                        label="Chat History",
-                        height=600,
-                        render_markdown=True
+                        label="Conversation",
+                        height=500,
+                        type="messages"
                     )
                     
                     with gr.Row():
                         msg = gr.Textbox(
-                            label="Claim or URL",
-                            placeholder="Enter news claim or paste URL...",
-                            lines=3,
+                            label="Question or Claim",
+                            placeholder="E.g., 'Did Trump offer green cards to students?' or 'But I read it was true...'",
                             scale=4
                         )
-                        submit_btn = gr.Button("🔍 Verify", scale=1, size="lg")
+                        submit_btn = gr.Button("Send", size="lg", scale=1)
                     
                     with gr.Row():
-                        clear_btn = gr.Button("🗑️ Clear History", scale=1)
-                        example_btn = gr.Button("📝 Try Example", scale=1)
+                        clear_btn = gr.Button("🗑️ Clear", scale=1)
+                        example_btn = gr.Button("📝 Example", scale=1)
                     
-                    # Wire up interactions
                     submit_btn.click(
                         chat_interface,
                         inputs=[msg, chatbot],
@@ -252,104 +273,115 @@ def create_interface():
                     clear_btn.click(lambda: [], outputs=chatbot)
                     
                     def load_example():
-                        examples = [
-                            "The Earth revolves around the Sun.",
-                            "Water boils at 100 degrees Celsius at sea level.",
-                            "The Great Wall of China is visible from space with the naked eye.",
-                            "Vitamin C prevents the common cold.",
-                        ]
                         import random
+                        examples = [
+                            "Trump offered international students green cards",
+                            "But I have confirmed this from different sources",
+                            "The moon is visible from Saturn with naked eye",
+                            "Dharmendra, actor, died recently",
+                            "But his family confirmed it",
+                        ]
                         return random.choice(examples)
                     
                     example_btn.click(load_example, outputs=msg)
                 
                 with gr.Column(scale=1):
-                    gr.Markdown("### 📊 Statistics")
+                    gr.Markdown("### 📊 Stats")
                     stats_output = gr.Markdown()
                     refresh_btn = gr.Button("🔄 Refresh", scale=1)
                     refresh_btn.click(get_stats, outputs=stats_output)
                     demo.load(get_stats, outputs=stats_output)
                     
                     gr.Markdown("""
-                    ### ✨ ADK Pipeline
+                    ### ℹ️ How It Works
                     
-                    **5 Sequential Agents:**
-                    1. 📥 Ingestion
-                    2. 🎯 Extraction
-                    3. 🔍 Verification
-                    4. ⚖️ Aggregation
-                    5. 📄 Report
+                    **New Claims:**
+                    - Full fact-check
+                    - Search evidence
+                    - 2 API calls
                     
-                    **Tools:**
-                    - FAISS Knowledge Base
-                    - Google Search
+                    **Follow-ups:**
+                    - Understands context
+                    - Links to previous
+                    - 0 API calls
                     
-                    **Features:**
-                    - Sequential execution
-                    - Session management
-                    - Memory caching
-                    - Async processing
+                    **Chat:**
+                    - Natural response
+                    - Helpful guidance
+                    - 0 API calls
                     """)
         
-        with gr.Tab("ℹ️ About"):
+        with gr.Tab("ℹ️ Guide"):
             gr.Markdown("""
-            ## About This System
+            ## How This Works
             
-            This is a **Pure Google ADK implementation** of a fact-checking agent system.
+            ### Verdict Format
             
-            ### Architecture
+            Results show **three parts**:
             
-            **Root Orchestrator** (`root_orchestrator.py`)
-            - Coordinates 5 LlmAgent sub-agents
-            - Sequential execution via async/await
-            - Uses Google ADK `Runner` + `InMemorySessionService`
+            1. **Verdict Category**
+               - ✅ LIKELY TRUE
+               - ❌ LIKELY FALSE
+               - ❓ CANNOT BE DETERMINED
             
-            **5 Sequential Agents (All LlmAgent):**
-            1. **IngestionAgent** - Cleans input text or extracts from URLs
-            2. **ExtractionAgent** - Extracts main verifiable claim
-            3. **VerificationAgent** - Searches FAISS + Google for evidence
-            4. **AggregationAgent** - Counts evidence and generates verdict
-            5. **ReportAgent** - Creates comprehensive fact-check report
+            2. **Confidence Score**
+               - 0-100% certainty based on evidence
             
-            **Tools (FunctionTool):**
-            - `extract_url_content()` - Web scraping
-            - `validate_and_clean_text()` - Text cleaning
-            - `extract_main_claim()` - LLM-based claim extraction
-            - `search_faiss_knowledge_base()` - Semantic search
-            - `search_google()` - Real-time web search
-            - `evaluate_evidence()` - Evidence classification
-            - `count_evidence()` - Evidence counting
-            - `generate_verdict()` - Verdict generation
-            - `format_report()` - Report formatting
+            3. **Detailed Reasoning**
+               - Why this verdict was reached
+               - Evidence summary
+               - Key findings
             
-            ### Technology Stack
+            ### Conversation Memory
             
-            - **Google ADK** - Agent orchestration
-            - **Gemini 2.5 Flash** - LLM reasoning
-            - **FAISS** - Semantic knowledge base search
-            - **Google Search** - Real-time verification
-            - **SQLite** - Session & memory caching
-            - **Gradio** - Web interface
+            The system **remembers previous discussions**:
             
-            ### How It Works
+            ```
+            You: "Did Trump offer green cards?"
+            Bot: Verdict = FALSE
             
-            1. **User Input** → Ingestion Agent (cleans text)
-            2. **Clean Text** → Extraction Agent (extracts claim)
-            3. **Claim** → Verification Agent (searches evidence)
-            4. **Evidence** → Aggregation Agent (generates verdict)
-            5. **Verdict** → Report Agent (creates report)
-            6. **Report** → User sees comprehensive fact-check result
+            You: "But I read it was true"
+            Bot: Understands you're following up
+                Returns context-aware response
+                Links to original claim
+            ```
             
-            ### Benefits of ADK
+            ### Smart Routing
             
-            ✅ **Modular** - Each agent has clear responsibility  
-            ✅ **Transparent** - See agent progression  
-            ✅ **Maintainable** - Easy to modify agents  
-            ✅ **Production-Ready** - Built-in error handling  
-            ✅ **Scalable** - Add/remove agents easily  
-            ✅ **Native Tools** - Google ADK FunctionTools  
-            ✅ **Session Management** - Built-in InMemorySessionService  
-            ✅ **Async-Ready** - Full asyncio integration  
+            Different queries get different handling:
+            
+            | Query Type | Processing | API Calls |
+            |-----------|-----------|----------|
+            | New Claim | Full fact-check | 2 |
+            | Follow-up | Context-aware | 0 |
+            | Chat | Friendly reply | 0 |
+            | Cached | Instant | 0 |
+            
+            ### Examples
+            
+            **Example 1: New Claim**
+            ```
+            Input: "Is water made of hydrogen?"
+            Processing: Full fact-check (2 API calls)
+            Time: 3-4 seconds
+            Result: TRUE (95% confidence)
+            ```
+            
+            **Example 2: Follow-up**
+            ```
+            Input: "But my chemistry teacher said..."
+            Processing: Context-aware (0 API calls)
+            Time: <1 second
+            Result: Links to previous claim
+            ```
+            
+            **Example 3: Casual Chat**
+            ```
+            Input: "Thanks for your help"
+            Processing: Friendly (0 API calls)
+            Time: <500ms
+            Result: You're welcome response
+            ```
             """)
     
     return demo
@@ -358,11 +390,10 @@ def create_interface():
 def main():
     """Main entry point"""
     try:
-        print("🚀 Starting Fact-Check Agent (Pure ADK)...")
-        print("📍 Opening at http://0.0.0.0:8000")
+        print("🚀 Starting Improved Fact-Check Agent...")
+        print("📍 http://0.0.0.0:8000")
         
         demo = create_interface()
-        
         demo.launch(
             server_name="0.0.0.0",
             server_port=8000,

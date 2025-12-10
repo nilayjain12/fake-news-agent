@@ -21,7 +21,7 @@ def create_ingestion_agent():
 If the input is a URL (starts with http):
 1. Use the extract_url_content tool to get the content
 2. Return the extracted text
-
+ 
 If the input is raw text:
 1. Use validate_and_clean_text tool to clean it
 2. Return the cleaned text
