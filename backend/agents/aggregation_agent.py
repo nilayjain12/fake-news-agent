@@ -1,32 +1,61 @@
-# ==============================================================================
-# FILE 6: backend/agents/aggregation_agent.py (NEW FILE - REPLACES aggregator_and_verdict.py)
-# ==============================================================================
+# ============================================================================
+# FILE 4: backend/agents/aggregation_agent.py (FIXED)
+# ============================================================================
 
-from google.adk import Agent
-from config import ADK_MODEL_NAME, get_logger
+from google.adk.agents import Agent
+from config import ADK_MODEL_NAME, get_logger, GENERATE_CONTENT_CONFIG
 from tools.custom_tools import count_evidence, generate_verdict
+from pydantic import BaseModel, Field
 
 logger = get_logger(__name__)
 
 
+class AggregationInput(BaseModel):
+    evaluation_results: dict = Field(description="Results from evidence evaluation")
+    main_claim: str = Field(description="The claim being evaluated")
+
+
+class AggregationOutput(BaseModel):
+    verdict: str = Field(description="Final verdict: TRUE/FALSE/INCONCLUSIVE")
+    confidence: float = Field(description="Confidence score 0.0-1.0")
+    reasoning: str = Field(description="Explanation of verdict")
+
+
 def create_aggregation_agent():
-    """Creates the Aggregation LLM Agent"""
     logger.warning("🚀 Creating Aggregation Agent")
     
-    agent = Agent(
-        model=ADK_MODEL_NAME,
-        name="aggregation_agent",
-        description="Aggregates evidence and generates final verdict",
-        instruction="""You are an aggregation agent.
-Given evaluation results:
-1. Use count_evidence tool to tally SUPPORTS and REFUTES
-2. Use generate_verdict tool to create the final verdict
-3. Return the verdict in this format: VERDICT: [TRUE/FALSE/INCONCLUSIVE], CONFIDENCE: [X%]
+    agent_kwargs = {
+        "model": ADK_MODEL_NAME,
+        "name": "aggregation_agent",
+        "description": "Aggregates evidence and generates final verdict",
+        "instruction": """You are an aggregation agent generating fact-check verdicts.
 
-Provide only the verdict information as your final response.""",
-        tools=[count_evidence, generate_verdict]
-    )
+Given the evaluation results:
+{evaluation_results}
+
+For claim:
+{main_claim}
+
+Your job is:
+1. Use count_evidence tool to count SUPPORTS vs REFUTES
+2. Use generate_verdict tool to create the final verdict
+3. Return ONLY the verdict information in this format:
+
+VERDICT: [TRUE/FALSE/INCONCLUSIVE]
+CONFIDENCE: [0.0-1.0 as decimal]
+REASONING: [2-3 sentence explanation]
+
+Do not add any other text.""",
+        "tools": [count_evidence, generate_verdict],
+        "input_schema": AggregationInput,
+        "output_schema": AggregationOutput,
+        "output_key": "aggregation_result"
+    }
     
+    if GENERATE_CONTENT_CONFIG is not None:
+        agent_kwargs["generate_content_config"] = GENERATE_CONTENT_CONFIG
+    
+    agent = Agent(**agent_kwargs)
     return agent
 
 

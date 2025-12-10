@@ -1,10 +1,9 @@
 # ==============================================================================
-# FILE 9: backend/main.py (REPLACE EXISTING)
+# FILE: backend/main.py (Refactored for ADK)
 # ==============================================================================
 
 import sys
 import asyncio
-import time
 from pathlib import Path
 
 BACKEND_PATH = Path(__file__).parent
@@ -25,19 +24,27 @@ async def main_async():
     memory.create_session(session_id, user_id="cli-user")
     
     print("\n" + "="*70)
-    print("🎯 Fake News Detection - ADK Multi-Agent System")
+    print("🎯 Fact-Checking Agent - Google ADK Pipeline")
     print("="*70)
-    print("\n✅ Using Google ADK LlmAgent Framework:")
-    print("   • Root Orchestrator coordinates pipeline")
-    print("   • 5 LlmAgent sub-agents in sequential execution")
-    print("   • Native ADK tool management")
-    print("   • Async/await for efficient execution\n")
+    print("\n✅ Architecture:")
+    print("   Root Agent (SequentialAgent)")
+    print("   ├─ Ingestion Agent (LlmAgent)")
+    print("   ├─ Extraction Agent (LlmAgent)")
+    print("   ├─ Verification Agent (SequentialAgent)")
+    print("   │  ├─ Search Knowledge Agent (LlmAgent)")
+    print("   │  ├─ Search Web Agent (LlmAgent)")
+    print("   │  └─ Evaluate Evidence Agent (LlmAgent)")
+    print("   ├─ Aggregation Agent (LlmAgent)")
+    print("   └─ Report Agent (LlmAgent)")
+    print("\n   All agents share session state for clean data flow")
+    print("   Tools: FAISS, Google Search, Local Evaluation\n")
+    
     print("Enter URL or text to fact-check.")
     print("Type 'exit' to quit.\n")
     
     while True:
         try:
-            user_input = input("📝 Enter claim or URL: ").strip()
+            user_input = input("📝 Claim to verify: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting...")
             break
@@ -49,14 +56,25 @@ async def main_async():
             print("Goodbye! 👋")
             break
         
-        logger.warning("🔍 Query received: %s", user_input[:80])
-        print("\n⏳ Processing with ADK agents...\n")
+        logger.warning("🔍 Query: %s", user_input[:80])
+        print("\n⏳ Processing through ADK pipeline...\n")
         
-        result = await root_orchestrator.run_pipeline(user_input, session_id=session_id)
+        result = await root_orchestrator.process_query(
+            user_input=user_input,
+            session_id=session_id
+        )
         
         if result["success"]:
-            print(result.get("report", "No report"))
-            print(f"\n✅ Complete in {result['execution_time_ms']:.0f}ms\n")
+            # Format output
+            report = result.get("report", "No report generated")
+            print(report)
+            
+            # Stats
+            stats = root_orchestrator.get_stats()
+            quota = stats["quota_status"]
+            print(f"\n⏱️ Time: {result['execution_time_ms']:.0f}ms")
+            print(f"📊 API Calls: {result['api_calls']}/20 ({quota['remaining']} remaining)")
+            print(f"📚 Evidence Sources: {result['evidence_count']}\n")
         else:
             print(f"❌ Error: {result.get('error')}\n")
 

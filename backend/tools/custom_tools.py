@@ -7,7 +7,7 @@ All LLM-heavy operations moved to root_orchestrator.
 import requests
 from bs4 import BeautifulSoup
 from tools.faiss_tool import faiss_search_tool
-from tools.google_search_tool import google_search_tool
+from tools.google_search_tool import google_search
 from config import get_logger
 
 logger = get_logger(__name__)
@@ -85,7 +85,7 @@ def search_web(claim: str) -> list:
     """Search Google - Delegates to tool - NO ADDITIONAL API CALLS"""
     logger.warning("🌐 Searching Google (k=10)")
     try:
-        results = google_search_tool(claim, top_k=10)
+        results = google_search(claim, top_k=10)
         logger.warning("✅ Found %d web results", len(results))
         return results
     except Exception as e:
