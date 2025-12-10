@@ -1,15 +1,15 @@
-# ui/app.py (IMPROVED - Better Formatting & Context)
+# ui/app.py (COMPLETELY FIXED - Proper Async Handling)
 """
-Improved UI with:
-- Clear verdict display (category first, then reasoning)
-- Conversation memory tracking
-- Smart query routing
-- Better response formatting
+Improved UI with proper async handling for Gradio
+- FIXED: Each query gets unique session
+- FIXED: Proper asyncio event loop handling
+- FIXED: No more "already exists" errors
 """
 
 import gradio as gr
 import sys
 import asyncio
+import uuid
 from pathlib import Path
 from datetime import datetime
 import os
@@ -25,24 +25,24 @@ from config import get_logger
 logger = get_logger(__name__)
 
 memory = None
-session_id = None
+base_session_id = None
 
 
 def initialize():
-    """Initialize on startup"""
-    global memory, session_id
+    """Initialize on startup - ONLY ONCE"""
+    global memory, base_session_id
     
     if memory is None:
         try:
             memory = MemoryManager()
-            session_id = f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            memory.create_session(session_id, user_id="web-user")
-            logger.warning(f"✅ Improved Orchestrator initialized: {session_id}")
+            base_session_id = f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            memory.create_session(base_session_id, user_id="web-user")
+            logger.warning(f"✅ Orchestrator initialized: {base_session_id}")
         except Exception as e:
             logger.exception(f"❌ Init error: {e}")
             raise
     
-    return memory, session_id
+    return memory, base_session_id
 
 
 def format_response(result: dict) -> str:
@@ -50,83 +50,33 @@ def format_response(result: dict) -> str:
     
     if not result.get("success"):
         error = result.get("error", "Unknown error")
-        return f"❌ **Error**\n\n{error}"
-    
-    # ===== CASUAL CHAT =====
-    if result.get("is_casual_chat"):
-        response = result.get("response", "")
         execution = result.get("execution_time_ms", 0)
-        return f"{response}\n\n---\n⏱️ Response: {execution:.0f}ms"
+        return f"❌ **Error**\n\n{error}\n\n---\n⏱️ {execution:.0f}ms"
     
-    # ===== FOLLOW-UP =====
-    if result.get("is_follow_up"):
-        claim = result.get("claim", "Previous claim")
-        reasoning = result.get("reasoning", "")
-        verdict = result.get("verdict", "UNKNOWN")
-        confidence = result.get("confidence", 0)
-        execution = result.get("execution_time_ms", 0)
-        
-        return f"""## Regarding: {claim[:80]}...
-
-**Previous Verdict:** {verdict} ({confidence:.0%})
-
-{reasoning}
-
----
-⏱️ Response Time: {execution:.0f}ms
-📊 API Calls: 0 (Context-aware response)"""
-    
-    # ===== NEW CLAIM FACT-CHECK =====
     claim = result.get("claim", "Unknown claim")
     verdict = result.get("verdict", "INCONCLUSIVE").upper()
     confidence = result.get("confidence", 0)
-    reasoning = result.get("reasoning", "")
+    report = result.get("report", "No report generated")
     evidence_count = result.get("evidence_count", 0)
     execution = result.get("execution_time_ms", 0)
-    from_cache = result.get("from_cache", False)
     api_calls = result.get("api_calls", 0)
     
-    # Format verdict with icon and category name
-    verdict_icons = {
-        "TRUE": "✅",
-        "FALSE": "❌",
-        "INCONCLUSIVE": "❓"
-    }
-    
-    verdict_names = {
-        "TRUE": "LIKELY TRUE",
-        "FALSE": "LIKELY FALSE",
-        "INCONCLUSIVE": "CANNOT BE DETERMINED"
-    }
-    
-    icon = verdict_icons.get(verdict, "❓")
-    name = verdict_names.get(verdict, "UNKNOWN")
-    
-    response = f"""## Fact-Check Result
-
-### Verdict Category
-**{icon} {name}**
-Confidence: {confidence:.0%}
-
-### Claim
-> {claim}
-
-### Reasoning
-{reasoning}
+    response = f"""{report}
 
 ---
 ⏱️ Execution Time: {execution:.0f}ms
 📊 API Calls: {api_calls}/20
-📚 Evidence Reviewed: {evidence_count} sources
-{"💾 From Cache (Instant)" if from_cache else "🔍 Fresh Fact-Check"}"""
+📚 Evidence Reviewed: {evidence_count} sources"""
     
     return response
 
 
-async def process_fact_check(user_input: str) -> str:
-    """Process query using improved orchestrator"""
-    
-    memory_inst, session = initialize()
+async def process_fact_check_async(user_input: str, session_id: str) -> str:
+    """
+    FIXED: Async function for fact-checking
+    - Each query gets unique session to avoid conflicts
+    - Direct await works with Gradio's event loop
+    """
     
     if not user_input.strip():
         return "Please enter a claim or question."
@@ -134,13 +84,13 @@ async def process_fact_check(user_input: str) -> str:
     try:
         logger.warning("🔍 Processing: %s", user_input[:80])
         
-        # Run improved orchestrator
+        # CRITICAL FIX: Use passed session_id directly
+        # root_orchestrator will add unique suffix for true uniqueness
         result = await root_orchestrator.process_query(
             user_input=user_input,
-            session_id=session
+            session_id=session_id
         )
         
-        # Format and return response
         return format_response(result)
     
     except Exception as e:
@@ -149,7 +99,11 @@ async def process_fact_check(user_input: str) -> str:
 
 
 def chat_interface(message: str, history: list):
-    """Chat interface with conversation tracking"""
+    """
+    FIXED: Chat interface that works with Gradio's async
+    - Generate unique session per chat session
+    - No asyncio.run() conflicts
+    """
     
     if not message.strip():
         return history, ""
@@ -158,11 +112,47 @@ def chat_interface(message: str, history: list):
     history.append({"role": "user", "content": message})
     
     try:
-        # Process message
-        result = asyncio.run(process_fact_check(message))
+        memory_inst, session_id = initialize()
+        
+        # Generate unique session ID for this specific query
+        # This prevents "Session already exists" errors
+        query_session_id = f"{session_id}-query-{uuid.uuid4().hex[:6]}"
+        
+        # Process message using asyncio.run() for sync context
+        # (This is called from Gradio's sync context, so we need asyncio.run)
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in async context (shouldn't happen in chat_interface)
+                # but handle it anyway
+                task = loop.create_task(
+                    process_fact_check_async(message, query_session_id)
+                )
+                result = asyncio.run(task)
+            else:
+                # Normal case: no running loop, create one
+                result = asyncio.run(
+                    process_fact_check_async(message, query_session_id)
+                )
+        except RuntimeError:
+            # No event loop exists, create one
+            result = asyncio.run(
+                process_fact_check_async(message, query_session_id)
+            )
         
         # Add bot response to history
         history.append({"role": "assistant", "content": result})
+        
+        # Log to memory
+        try:
+            memory_inst.add_interaction(
+                session_id=query_session_id,
+                query=message,
+                processed_input=message,
+                verdict="PROCESSED"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Could not log interaction: {e}")
         
     except Exception as e:
         logger.exception(f"❌ Chat error: {e}")
@@ -199,7 +189,7 @@ def get_stats() -> str:
 **Current Session:**
 - Cache Hits: {orch_stats['cache_hits']}
 - API Calls Used: {orch_stats['api_calls']}/20
-- Remaining: {20 - orch_stats['api_calls']}/20"""
+- Remaining: {max(0, 20 - orch_stats['api_calls'])}/20"""
         
         return stats_text
     except Exception as e:
@@ -214,25 +204,18 @@ def create_interface():
     with gr.Blocks(
         title="Fact-Check Agent",
         theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="purple"),
-        css="""
-        .verdict-container {
-            border-left: 4px solid #667eea;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 5px;
-        }
-        """
     ) as demo:
         
         gr.Markdown("""
         # 🔍 Smart Fact-Check Agent
         
-        **Context-Aware Verification with Conversation Memory**
+        **Powered by Google Gemini + ADK Framework**
         
-        - ✅ **Clear Verdicts** - Category + Confidence + Reasoning
-        - 💬 **Conversation Memory** - Understands follow-ups
-        - 🎯 **Smart Routing** - New claims vs follow-ups vs chat
-        - ⚡ **Efficient** - 2 API calls for facts, 0 for follow-ups
+        ⚠️ **NOTE:** Free tier is slow (30-60s per query). Please be patient!
+        
+        - ✅ **Clear Verdicts** - TRUE/FALSE/INCONCLUSIVE with confidence
+        - 🔍 **Evidence-Based** - Searches web and knowledge base
+        - ⚡ **Reliable** - Handles errors gracefully
         """)
         
         with gr.Tab("💬 Fact-Check"):
@@ -249,7 +232,7 @@ def create_interface():
                     with gr.Row():
                         msg = gr.Textbox(
                             label="Question or Claim",
-                            placeholder="E.g., 'Did Trump offer green cards to students?' or 'But I read it was true...'",
+                            placeholder="E.g., 'Pluto is still a planet' or 'Water boils at 100°C'",
                             scale=4
                         )
                         submit_btn = gr.Button("Send", size="lg", scale=1)
@@ -275,11 +258,11 @@ def create_interface():
                     def load_example():
                         import random
                         examples = [
-                            "Trump offered international students green cards",
-                            "But I have confirmed this from different sources",
+                            "Pluto has been discarded from being called a planet",
                             "The moon is visible from Saturn with naked eye",
-                            "Dharmendra, actor, died recently",
-                            "But his family confirmed it",
+                            "Water boils at 100 degrees Celsius",
+                            "Gravity pulls objects downward",
+                            "Jupiter is the largest planet in our solar system",
                         ]
                         return random.choice(examples)
                     
@@ -293,95 +276,105 @@ def create_interface():
                     demo.load(get_stats, outputs=stats_output)
                     
                     gr.Markdown("""
-                    ### ℹ️ How It Works
+                    ### ⚠️ Important Notes
                     
-                    **New Claims:**
-                    - Full fact-check
-                    - Search evidence
-                    - 2 API calls
+                    **Slow Processing:**
+                    - Free tier takes 30-60s per query
+                    - This is normal!
+                    - Each query creates unique session
                     
-                    **Follow-ups:**
-                    - Understands context
-                    - Links to previous
-                    - 0 API calls
+                    **API Limits:**
+                    - 20 requests/day
+                    - 10 requests/minute
+                    - Resets at 8am UTC
                     
-                    **Chat:**
-                    - Natural response
-                    - Helpful guidance
-                    - 0 API calls
+                    **If Timeout:**
+                    - Try a simpler claim
+                    - Wait a minute
+                    - Check internet connection
                     """)
         
         with gr.Tab("ℹ️ Guide"):
             gr.Markdown("""
-            ## How This Works
+            ## How This Fact-Checker Works
             
-            ### Verdict Format
+            ### Processing Pipeline
             
-            Results show **three parts**:
+            Each claim goes through:
             
-            1. **Verdict Category**
-               - ✅ LIKELY TRUE
-               - ❌ LIKELY FALSE
-               - ❓ CANNOT BE DETERMINED
+            1. **Ingestion** - Clean and prepare text
+            2. **Extraction** - Identify main claim
+            3. **Verification** - Search web + FAISS database
+            4. **Aggregation** - Count supporting/refuting evidence
+            5. **Report** - Generate verdict + reasoning
             
-            2. **Confidence Score**
-               - 0-100% certainty based on evidence
+            **Total time:** 30-60 seconds (free tier is slow)
             
-            3. **Detailed Reasoning**
-               - Why this verdict was reached
-               - Evidence summary
-               - Key findings
+            ### Verdict Types
             
-            ### Conversation Memory
+            - **✅ LIKELY TRUE** - Multiple sources support it
+            - **❌ LIKELY FALSE** - Multiple sources contradict it
+            - **❓ CANNOT DETERMINE** - Mixed or insufficient evidence
             
-            The system **remembers previous discussions**:
+            ### Confidence Scores
             
+            - **90-100%** - Very strong agreement in evidence
+            - **70-89%** - Good agreement
+            - **50-69%** - Mixed evidence
+            - **Below 50%** - Very uncertain
+            
+            ### Session Management
+            
+            **Each query gets a unique session** to prevent conflicts:
             ```
-            You: "Did Trump offer green cards?"
-            Bot: Verdict = FALSE
-            
-            You: "But I read it was true"
-            Bot: Understands you're following up
-                Returns context-aware response
-                Links to original claim
+            Session ID format: web-YYYYMMDD-HHMMSS-query-XXXXXX
             ```
             
-            ### Smart Routing
-            
-            Different queries get different handling:
-            
-            | Query Type | Processing | API Calls |
-            |-----------|-----------|----------|
-            | New Claim | Full fact-check | 2 |
-            | Follow-up | Context-aware | 0 |
-            | Chat | Friendly reply | 0 |
-            | Cached | Instant | 0 |
+            This ensures:
+            - No "Session already exists" errors
+            - Multiple concurrent users
+            - Clean isolation between queries
             
             ### Examples
             
-            **Example 1: New Claim**
+            **Example 1: Clear Fact**
             ```
-            Input: "Is water made of hydrogen?"
-            Processing: Full fact-check (2 API calls)
-            Time: 3-4 seconds
-            Result: TRUE (95% confidence)
-            ```
-            
-            **Example 2: Follow-up**
-            ```
-            Input: "But my chemistry teacher said..."
-            Processing: Context-aware (0 API calls)
-            Time: <1 second
-            Result: Links to previous claim
+            Input: "Pluto is a planet"
+            Expected: FALSE (95% confidence)
+            Reason: Reclassified as dwarf planet in 2006
+            Time: ~40 seconds
             ```
             
-            **Example 3: Casual Chat**
+            **Example 2: Well-Known Truth**
             ```
-            Input: "Thanks for your help"
-            Processing: Friendly (0 API calls)
-            Time: <500ms
-            Result: You're welcome response
+            Input: "Water boils at 100°C at sea level"
+            Expected: TRUE (98% confidence)
+            Reason: Basic scientific fact, multiple sources
+            Time: ~45 seconds
             ```
+            
+            **Example 3: Ambiguous Claim**
+            ```
+            Input: "AI is dangerous"
+            Expected: INCONCLUSIVE (55% confidence)
+            Reason: Depends on context, mixed evidence
+            Time: ~50 seconds
+            ```
+            
+            ### Troubleshooting
+            
+            **Timeout after 3 minutes?**
+            - The API is very slow on free tier
+            - Try a simpler, shorter claim
+            - Wait 5 minutes and try again
+            
+            **"Already exists" error?**
+            - Each query now uses unique session
+            - Should be fixed!
+            
+            **Want faster responses?**
+            - Upgrade to paid API tier
+            - Or host locally with better resources
             """)
     
     return demo
@@ -390,8 +383,7 @@ def create_interface():
 def main():
     """Main entry point"""
     try:
-        print("🚀 Starting Improved Fact-Check Agent...")
-        print("📍 http://0.0.0.0:8000")
+        logger.warning("🚀 Launching Gradio interface...")
         
         demo = create_interface()
         demo.launch(

@@ -1,36 +1,46 @@
 """
-Launcher script for Fake News Detection Agent UI
-Run this file to start the Gradio web interface
+FIXED: Direct Gradio launch (no subprocess)
+- Removes subprocess overhead
+- Allows proper async event loop sharing
+- Better error handling
 """
 
-import subprocess
 import sys
+import os
 from pathlib import Path
 
+# Setup paths BEFORE any imports
+BACKEND_PATH = Path(__file__).parent / "backend"
+sys.path.insert(0, str(BACKEND_PATH))
+os.chdir(str(BACKEND_PATH))
+
 def main():
-    """Launch the Gradio UI"""
-    # Path to the Gradio app
-    app_path = Path(__file__).parent / "ui" / "app.py"
-    
-    if not app_path.exists():
-        print(f"❌ Error: UI app not found at {app_path}")
-        sys.exit(1)
-    
-    print("🚀 Starting Fake News Detection Agent UI...")
-    print("📍 Opening browser at http://localhost:8000")
-    print("⌨️  Press Ctrl+C to stop the server\n")
-    
-    # Launch Gradio
+    """Launch Gradio app directly"""
     try:
-        subprocess.run([
-            sys.executable, 
-            str(app_path)
-        ])
+        print("🚀 Starting Fact-Check Agent UI...")
+        print("📍 http://0.0.0.0:8000")
+        print("⌨️  Press Ctrl+C to stop the server\n")
+        
+        # Import AFTER path setup
+        from ui.app import create_interface
+        
+        # Create and launch interface
+        demo = create_interface()
+        demo.launch(
+            server_name="0.0.0.0",
+            server_port=8000,
+            share=False,
+            show_error=True
+        )
+        
     except KeyboardInterrupt:
-        print("\n\n👋 Shutting down server... Goodbye!")
+        print("\n\n👋 Shutting down... Goodbye!")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
