@@ -1,6 +1,5 @@
 # ==============================================================================
-
-# FILE 1: backend/config.py (SIMPLIFIED - 90s timeout)
+# FILE: backend/config.py (FIXED - Proper Deadline Settings)
 # ======================================================
 
 import os
@@ -31,23 +30,29 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 FAISS_INDEX_PATH = os.path.join(PROJECT_ROOT, "data", "embeddings")
 EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 
-# ===== RETRY & TIMEOUT CONFIGURATION =====
+# ===== RETRY & TIMEOUT CONFIGURATION (FIXED) =====
+# CRITICAL: Google's API requires minimum 10s deadline
 try:
     from google.genai import types
     
+    # FIXED: Proper retry configuration
+    # - initial_delay: Start with 2s between retries
+    # - max_delay: Max 60s between retries
+    # - No manual deadline (let Google set it internally)
     RETRY_CONFIG = types.HttpRetryOptions(
         initial_delay=2,
-        max_delay=30
+        max_delay=60
     )
     
-    # INCREASED: 90 seconds (was 60)
+    # FIXED: Don't set custom deadline - use Google's defaults
+    # The timeout in HttpOptions is for the overall request, not deadline
     GENERATE_CONTENT_CONFIG = types.GenerateContentConfig(
         temperature=0.7,
         top_p=0.95,
         top_k=40,
         http_options=types.HttpOptions(
             retry_options=RETRY_CONFIG,
-            timeout=90.0  # 90 SECONDS
+            timeout=300.0  # 90 seconds for total request
         )
     )
     
@@ -67,7 +72,7 @@ GEMINI_MODEL_POOL = [
     "gemini-2.0-flash"
 ]
 
-ADK_MODEL_NAME = GEMINI_MODEL_POOL[0]
+ADK_MODEL_NAME = GEMINI_MODEL_POOL[1]
 TOP_K = 3
 
 LOG_LEVEL = os.environ.get("FNA_LOG_LEVEL", "WARNING").upper()
@@ -85,6 +90,7 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("google").setLevel(logging.WARNING)
 logging.getLogger("langchain").setLevel(logging.WARNING)
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
+logging.getLogger("grpc").setLevel(logging.WARNING)
 
 def get_logger(name: str):
     return logging.getLogger(name)
@@ -107,6 +113,8 @@ class QuotaTracker:
         logger.warning("📊 Quota Tracker initialized")
         logger.warning(f"   Model: {ADK_MODEL_NAME}")
         logger.warning(f"   Timeout: 90 seconds")
+        logger.warning(f"   Retry: Exponential backoff (2s-60s)")
+        logger.warning(f"   Deadline: Auto (min 10s, set by Google)")
         logger.warning(f"   Cache: Enabled (1 hour)")
     
     def _update_reset_time(self):
@@ -158,7 +166,8 @@ class QuotaTracker:
             "calls_today": self.api_calls_today,
             "remaining": max(0, 20 - self.api_calls_today),
             "timeout_seconds": 90,
-            "cache_enabled": True
+            "cache_enabled": True,
+            "deadline": "Auto (min 10s)"
         }
 
 quota_tracker = QuotaTracker()
